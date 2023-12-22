@@ -19,7 +19,7 @@ The analysis involved a dataset of 870 employees. After removing employee identi
 
 Additionally, there were two test datasets. One of them did not include the attrition status of the employees, which was predicted by our attrition model developed during this study. The other test set lacked monthly income information for the employees, and it was predicted by our monthly income model created during this study. The prediction results can be found under the 'Prediction' folder in this repository.  
 
-All datasets were sourced from AWS S3.  
+All datasets were sourced from a dedicated AWS S3 storage.  
 
 For a detailed walkthrough of the analysis and conclusions, please refer to the R Markdown document.  
 
