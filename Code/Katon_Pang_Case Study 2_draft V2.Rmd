@@ -1,0 +1,659 @@
+---
+title: "DDSAnalytics - data analysis for predicting employee turnover"
+author: "Katon Pang"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RCurl)
+library(tidyverse)
+library(caret)
+library(class)
+library(e1071)
+
+library(jsonlite)
+library(GGally)
+library(dplyr)
+library(stringr)
+library(ggpubr)
+library(corrr)
+library(knitr)
+library(kableExtra)
+library(scales)
+library(multcomp)
+library(onewaytests)
+```
+
+```{r}
+# Set working directory to project folder
+setwd("C:/Users/katon/OneDrive/Documents/DS 6306 Doing Data Science/Week 14 and 15 Case Study 2/")
+
+# Getting Data From S3 URL Using RCurl
+case <- read.table(textConnection(getURL(
+  "https://s3.us-east-2.amazonaws.com/msdsds6306/CaseStudy2-data.csv"
+)), sep=",", header=TRUE)
+## There are 870 observation with 36 variables.
+
+# Getting test set for Attrition From S3 URL
+test_attr <- read.table(textConnection(getURL(
+  "https://s3.us-east-2.amazonaws.com/msdsds6306/CaseStudy2CompSet%20No%20Attrition.csv"
+)), sep=",", header=TRUE)
+
+# Getting test set for monthly salary From S3 URL
+test_salary <- read.table(textConnection(getURL(
+  "https://s3.us-east-2.amazonaws.com/msdsds6306/CaseStudy2CompSet%20No%20Salary.csv"
+)), sep=",", header=TRUE)
+
+
+test <- read.table(textConnection(getURL(
+  "https://s3.us-east-2.amazonaws.com/msdsds6306/Case2PredictionsRegressEXAMPLE.csv"
+)), sep=",", header=TRUE)
+```
+
+```{r}
+summary(case)
+str(case)
+
+## Within the 36 variables, the data consists of both categorical and quantitative variables. 
+
+
+# There is no missing data in the dataset.
+sum(is.na(case))
+
+```
+
+```{r}
+# Employee Attrition pct graph
+case %>% group_by(Attrition) %>% summarise(Count=n()) %>% mutate(attr_pct=round(prop.table(Count),2) * 100) %>% 
+ggplot(aes(x=Attrition, y=attr_pct)) + geom_bar(stat="identity", fill = "royalblue") + 
+geom_text(aes(label= sprintf("%.2f%%", attr_pct)),
+            vjust=-0.5, size=3) + labs(x="Employee Attrition", y="Percentage", title="Employee Attrition (%)")
+
+```
+
+# Common top reasons of employees attrition:
+## 1. Lack of purpose / bordom: JobInvolvement, JobSatisfaction
+## 2. Poor Compensation: Monthly Income
+## 3. Overworked: OverTime, WorkLifeBalance
+## 4. Poor work/life balance: WorkLifeBalance, DistanceFromHome, BusinessTravel
+## 5. Bad Managers: RelationshipSatisfication, YearsWithCurrManager
+
+```{r}
+## 1
+# Attrition by Job Satisfaction
+# Total number of employees in each JobSatisfaction
+Attr_JB = case %>% select(JobSatisfaction, Attrition) %>% group_by(JobSatisfaction) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each JobSatisfaction
+# Combine the result with Attr_JB data frame
+Attr_JB <- cbind(Attr_JB,as.data.frame.matrix(table(case$JobSatisfaction, case$Attrition)))
+
+# Make Attr_JB into long dataset
+Attr_JB_long <- gather(Attr_JB, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_JB_long$pct = Attr_JB_long$Qty / Attr_JB_long$count *100
+
+# Create the barplot
+Attr_JB_long %>% ggplot(aes(x=JobSatisfaction, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="Job Satisfaction", y="Percentage", title="Employee Attrition (%) by Job Satisfaction") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+
+```
+
+```{r}
+## 1
+# Attrition by Job Involvement
+# Total number of employees in each JobInvolvement
+Attr_JI = case %>% select(JobInvolvement, Attrition) %>% group_by(JobInvolvement) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each JobInvolvement
+# Combine the result with Attr_JI data frame
+Attr_JI <- cbind(Attr_JI,as.data.frame.matrix(table(case$JobInvolvement, case$Attrition)))
+
+# Make Attr_JI into long dataset
+Attr_JI_long <- gather(Attr_JI, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_JI_long$pct = Attr_JI_long$Qty / Attr_JI_long$count *100
+
+# Create the barplot
+Attr_JI_long %>% ggplot(aes(x=JobInvolvement, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="Job Involvement", y="Percentage", title="Employee Attrition (%) by Job Involvement") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+
+```
+
+```{r}
+## 5
+# Attrition by Relationship Satisfaction
+# Total number of employees in each RelationshipSatisfaction
+Attr_RS = case %>% select(RelationshipSatisfaction, Attrition) %>% group_by(RelationshipSatisfaction) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each RelationshipSatisfaction
+# Combine the result with Attr_RS data frame
+Attr_RS <- cbind(Attr_RS,as.data.frame.matrix(table(case$RelationshipSatisfaction, case$Attrition)))
+
+# Make Attr_RS into long dataset
+Attr_RS_long <- gather(Attr_RS, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_RS_long$pct = Attr_RS_long$Qty / Attr_RS_long$count *100
+
+# Create the barplot
+Attr_RS_long %>% ggplot(aes(x=RelationshipSatisfaction, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="Relationship Satisfaction", y="Percentage", title="Employee Attrition (%) by Relationship Satisfaction") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+
+```
+
+```{r}
+## 5
+# Boxplot - YearsWithCurrManager vs RelationshipSatisfaction group by attrition
+case$fRelationshipSatisfaction = as.factor(case$RelationshipSatisfaction)
+
+case %>% ggplot(aes(x = fRelationshipSatisfaction, y = YearsWithCurrManager, fill = Attrition)) + geom_boxplot()
+```
+
+```{r}
+## 5
+# Boxplot - YearsWithCurrManager vs RelationshipSatisfaction group by attrition
+case$WorkLifeBalance = as.factor(case$WorkLifeBalance)
+
+case %>% ggplot(aes(x = MaritalStatus, y = WorkLifeBalance, fill = Attrition)) + geom_boxplot()
+
+case %>% ggplot(aes(x = MaritalStatus, fill = WorkLifeBalance)) + geom_bar()
+
+```
+
+
+```{r}
+# Run a t-test on attrition status means
+
+case %>% ggplot(aes(x = Attrition, y = YearsWithCurrManager, fill = Attrition)) + geom_boxplot(fill = "royalblue", color = "black", width = 0.3)
+
+A_yes = as.data.frame(case$YearsWithCurrManager[case$Attrition == "Yes"])
+A_No = as.data.frame(case$YearsWithCurrManager[case$Attrition == "No"])
+
+t.test(x = A_yes, y = A_No, conf.int = .95, alternative = "two.sided")
+
+# Run a t-test on attrition status means
+
+case %>% ggplot(aes(x = Attrition, y = MonthlyIncome, fill = Attrition)) + geom_boxplot(fill = "royalblue", color = "black", width = 0.3)
+
+Income_yes = as.data.frame(case$MonthlyIncome[case$Attrition == "Yes"])
+Income_No = as.data.frame(case$MonthlyIncome[case$Attrition == "No"])
+
+t.test(x = Income_yes, y = Income_No, conf.int = .95, alternative = "two.sided")
+```
+
+```{r}
+# Attrition by Over Time
+# Total number of employees based on OverTime
+Attr_OT = case %>% select(OverTime, Attrition) %>% group_by(OverTime) %>% summarise(count=n())
+
+# Find out the number of each Attrition based on OverTime
+# Combine the result with Attr_OT data frame
+Attr_OT <- cbind(Attr_OT,as.data.frame.matrix(table(case$OverTime, case$Attrition)))
+
+# Make Attr_OT into long dataset
+Attr_OT_long <- gather(Attr_OT, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_OT_long$pct = Attr_OT_long$Qty / Attr_OT_long$count *100
+
+# Create the barplot
+Attr_OT_long %>% ggplot(aes(x=OverTime, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="Over Time", y="Percentage", title="Employee Attrition (%) by Over Time") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+
+```
+
+```{r}
+# Attrition by Work Life Balance
+# Total number of employees based on WorkLifeBalance
+Attr_WLB = case %>% select(WorkLifeBalance, Attrition) %>% group_by(WorkLifeBalance) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each WorkLifeBalance
+# Combine the result with Attr_WLB data frame
+Attr_WLB <- cbind(Attr_WLB,as.data.frame.matrix(table(case$WorkLifeBalance, case$Attrition)))
+
+# Make Attr_RS into long dataset
+Attr_WLB_long <- gather(Attr_WLB, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_WLB_long$pct = Attr_WLB_long$Qty / Attr_WLB_long$count *100
+
+# Create the barplot
+Attr_WLB_long %>% ggplot(aes(x=WorkLifeBalance, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="Work Life Balance", y="Percentage", title="Employee Attrition (%) by Work Life Balance") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+
+```
+
+```{r}
+# Attrition by Business Travel
+# Total number of employees based on BusinessTravel
+Attr_BT = case %>% select(BusinessTravel, Attrition) %>% group_by(BusinessTravel) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each BusinessTravel
+# Combine the result with Attr_WLB data frame
+Attr_BT <- cbind(Attr_BT,as.data.frame.matrix(table(case$BusinessTravel, case$Attrition)))
+
+# Make Attr_RS into long dataset
+Attr_BT_long <- gather(Attr_BT, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_BT_long$pct = Attr_BT_long$Qty / Attr_BT_long$count *100
+
+# Create the barplot
+Attr_BT_long %>% ggplot(aes(x=BusinessTravel, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="Business Travel", y="Percentage", title="Employee Attrition (%) by Business Travel") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+
+```
+
+```{r}
+# Age vs. Attrition -- Generation vs. Attrition
+case$Generation <- ifelse(case$Age<37,"Millenials",
+ifelse(case$Age>=38 & case$Age<53,"Gen X","Baby Boomers"))
+case$Generation = as.factor(case$Generation)
+
+# Total number of employees in each generation
+Attr_Gen = case %>% select(Generation, Attrition) %>% group_by(Generation) %>% summarise(count=n())
+
+# Find out percentage of Attrition for each generation
+Attr_Gen <- cbind(Attr_Gen,as.data.frame.matrix(table(case$Generation, case$Attrition)))
+
+# Make Attr_JB into long dataset
+Attr_Gen_long <- gather(Attr_Gen, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_Gen_long$pct = Attr_Gen_long$Qty / Attr_Gen_long$count *100
+
+# Create the barplot
+Attr_Gen_long %>% ggplot(aes(x=Generation, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="Generation", y="Percentage", title="Employee Attrition (%) by Generation") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+
+```
+
+```{r}
+# Attrition by JobRole
+# Total number of employees based on JobRole
+Attr_JR = case %>% select(JobRole, Attrition) %>% group_by(JobRole) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each JobRole
+# Combine the result with Attr_JR data frame
+Attr_JR <- cbind(Attr_JR,as.data.frame.matrix(table(case$JobRole, case$Attrition)))
+
+# Make Attr_RS into long dataset
+Attr_JR_long <- gather(Attr_JR, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_JR_long$pct = Attr_JR_long$Qty / Attr_JR_long$count *100
+
+# Create the barplot
+Attr_JR_long %>% ggplot(aes(x=JobRole, y=pct, fill=Attrition, label=pct)) + geom_col(width=1, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(1), vjust=-0.5, size=2.5) + labs(x="Job Role", y="Percentage", title="Employee Attrition (%) by Job Role") + theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=1)) +  scale_fill_manual(values = c("royalblue", "salmon"))
+
+```
+
+```{r}
+# Attrition by Gender
+# Total number of employees based on Gender
+Attr_G = case %>% select(Gender, Attrition) %>% group_by(Gender) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each Gender
+# Combine the result with Attr_JR data frame
+Attr_G <- cbind(Attr_G,as.data.frame.matrix(table(case$Gender, case$Attrition)))
+
+# Make Attr_RS into long dataset
+Attr_G_long <- gather(Attr_G, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_G_long$pct = Attr_G_long$Qty / Attr_G_long$count *100
+
+# Create the barplot
+Attr_G_long %>% ggplot(aes(x=Gender, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.5, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.5), vjust=-0.5, size=2.5) + labs(x="Gender", y="Percentage", title="Employee Attrition (%) by Gender") + theme_minimal() +scale_fill_manual(values = c("royalblue", "salmon"))
+
+```
+
+```{r}
+# Attrition by Marital Status
+# Total number of employees based on Marital Status
+Attr_MS = case %>% select(MaritalStatus, Attrition) %>% group_by(MaritalStatus) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each Marital Status
+# Combine the result with Attr_MS data frame
+Attr_MS <- cbind(Attr_MS,as.data.frame.matrix(table(case$MaritalStatus, case$Attrition)))
+
+# Make Attr_MS into long dataset
+Attr_MS_long <- gather(Attr_MS, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_MS_long$pct = Attr_MS_long$Qty / Attr_MS_long$count *100
+
+# Create the barplot
+Attr_MS_long %>% ggplot(aes(x=MaritalStatus, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.5, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.5), vjust=-0.5, size=2.5) + labs(x="Marital Status", y="Percentage", title="Employee Attrition (%) by Marital Status") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+
+```
+
+```{r}
+# Attrition by Stock Option Level
+# Total number of employees based on Stock Option Level
+Attr_SO = case %>% select(StockOptionLevel, Attrition) %>% group_by(StockOptionLevel) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each Stock Option Level
+# Combine the result with Attr_SO data frame
+Attr_SO <- cbind(Attr_SO,as.data.frame.matrix(table(case$StockOptionLevel, case$Attrition)))
+
+# Make Attr_SO into long dataset
+Attr_SO_long <- gather(Attr_SO, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_SO_long$pct = Attr_SO_long$Qty / Attr_SO_long$count *100
+
+# Create the barplot
+Attr_SO_long %>% ggplot(aes(x=StockOptionLevel, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.5, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.5), vjust=-0.5, size=2.5) + labs(x="Stock Option Level", y="Percentage", title="Employee Attrition (%) by Stock Option Level") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+
+```
+
+```{r}
+case2 = case
+
+# Change columns into numeric
+case2$Attrition[case2$Attrition == "Yes"] = 0
+case2$Attrition[case2$Attrition == "No"] = 1
+case2$Attrition = as.numeric(case2$Attrition)
+
+case2$nAttrition = case2$Attrition
+case2$nAttrition[case2$nAttrition == "Yes"] = 0
+case2$nAttrition[case2$nAttrition == "No"] = 1
+case2$nAttrition = as.numeric(case2$nAttrition)
+
+case2$BusinessTravel[case2$BusinessTravel == "Non-Travel"] = 0
+case2$BusinessTravel[case2$BusinessTravel == "Travel_Rarely"] = 1
+case2$BusinessTravel[case2$BusinessTravel == "Travel_Frequently"] = 2
+case2$BusinessTravel = as.numeric(case2$BusinessTravel)
+
+case2$Department[case2$Department == "Human Resources"] = 0
+case2$Department[case2$Department == "Research & Development"] = 1
+case2$Department[case2$Department == "Sales"] = 2
+case2$Department = as.numeric(case2$Department)
+
+case2$EducationField[case2$EducationField == "Human Resources"] = 0
+case2$EducationField[case2$EducationField == "Life Sciences"] = 1
+case2$EducationField[case2$EducationField == "Medical"] = 2
+case2$EducationField[case2$EducationField == "Marketing"] = 3
+case2$EducationField[case2$EducationField == "Technical Degree"] = 4
+case2$EducationField[case2$EducationField == "Other"] = 5
+case2$EducationField = as.numeric(case2$EducationField)
+
+case2$Gender[case2$Gender == "Female"] = 0
+case2$Gender[case2$Gender == "Male"] = 1
+case2$Gender = as.numeric(case2$Gender)
+
+case2$JobRole[case2$JobRole == "Healthcare Representative"] = 0
+case2$JobRole[case2$JobRole == "Human Resources"] = 1
+case2$JobRole[case2$JobRole == "Laboratory Technician"] = 2
+case2$JobRole[case2$JobRole == "Manager"] = 3
+case2$JobRole[case2$JobRole == "Manufacturing Director"] = 4
+case2$JobRole[case2$JobRole == "Research Director"] = 5
+case2$JobRole[case2$JobRole == "Research Scientist"] = 6
+case2$JobRole[case2$JobRole == "Sales Executive"] = 7
+case2$JobRole[case2$JobRole == "Sales Representative"] = 8
+case2$JobRole = as.numeric(case2$JobRole)
+
+case2$MaritalStatus[case2$MaritalStatus == "Divorced"] = 0
+case2$MaritalStatus[case2$MaritalStatus == "Single"] = 1
+case2$MaritalStatus[case2$MaritalStatus == "Married"] = 2
+case2$MaritalStatus = as.numeric(case2$MaritalStatus)
+
+case2$OverTime[case2$OverTime == "Yes"] = 0
+case2$OverTime[case2$OverTime == "No"] = 1
+case2$OverTime = as.numeric(case2$OverTime)
+
+summary(case2)
+str(case2)
+```
+
+## ID: Identification variable EmployeeCount: All 1’s EmployeeNumber: Identification Variable StandardHours: All 80’s. All Yes's Over18.  YearsAtCompany, YearsSinceLastPromotion: Have max values that are significantly larger than the 3rd quartile value
+
+```{r}
+# 1. Remove ID, EmployeeCount, EmployeeNumber, StandardHours
+case2$ID <- c()
+case2$EmployeeCount <- c()
+case2$EmployeeNumber <- c()
+case2$Over18 <- c()
+case2$StandardHours <-c()
+
+library(ppcor)
+df = case2[c('nAttrition', 'DailyRate', 'DistanceFromHome', 'HourlyRate', 'MonthlyIncome', 'MonthlyRate', 'NumCompaniesWorked', 'PercentSalaryHike', 'TotalWorkingYears', 'TrainingTimesLastYear', 'YearsAtCompany', 'YearsInCurrentRole', 'YearsSinceLastPromotion', 'YearsWithCurrManager', 'JobRole')]
+
+# pairwise partial correlations for each pair of variables
+parCor = pcor(df, method = "spearman")
+# p value of the test
+head(parCor$p.value)
+# partial correlation coefficient
+head(parCor$estimate)
+
+# See Attrition only
+attCor = as.data.frame(parCor$estimate[1,])
+attCor$factor = abs(attCor$`parCor$estimate[1, ]`)
+arrange(attCor, factor)
+
+
+
+fit = lm(Attrition~JobInvolvement + MonthlyIncome + OverTime + YearsWithCurrManager, data=case2)
+summary(fit)
+```
+
+```{r}
+case2$Attrition = as.factor(case2$Attrition)
+
+
+## Method 1 for imbalanced dataset
+# Oversampling 
+summary(case2$Attrition)
+OnlyYes = case2 %>% filter(Attrition == "Yes") # Give me all Yes
+# Oversampling of Yes
+OnlyYesOver = rbind(OnlyYes,OnlyYes[sample(seq(1,140,1),(730-140),replace = TRUE),])
+dim(OnlyYesOver)
+
+# Oversampling of Yes and the rest of the No
+OverSamp = rbind(case2 %>% filter(Attrition == "No"), OnlyYesOver)
+dim(OverSamp)
+
+# Make sure they are on the same order. Relevel to Yes as positive class
+OverSamp$Attrition = as.factor(OverSamp$Attrition)
+OverSamp$Attrition = relevel(OverSamp$Attrition, ref = "Yes")
+case2$Attrition = as.factor(case2$Attrition)
+case2$Attrition = relevel(case2$Attrition, ref = "Yes")
+test$Attrition = relevel(test$Attrition, ref = "Yes")
+
+
+```
+
+```{r}
+# NB
+
+# Model
+model = naiveBayes(OverSamp[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager')],OverSamp$Attrition)
+
+model = naiveBayes(OverSamp[,c('JobInvolvement', 'MonthlyIncome', 'OverTime')],OverSamp$Attrition)
+
+model = naiveBayes(OverSamp[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'JobRole')],OverSamp$Attrition)
+
+model = naiveBayes(OverSamp[,c('JobInvolvement', 'MonthlyIncome', 'YearsSinceLastPromotion', 'JobRole')],OverSamp$Attrition)
+
+model = naiveBayes(OverSamp[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager', 'JobRole')],OverSamp$Attrition)
+
+model = naiveBayes(OverSamp[,c('JobInvolvement', 'StockOptionLevel', 'OverTime', 'MaritalStatus', 'JobRole')],OverSamp$Attrition)
+
+# Only test set
+table(predict(model,test[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager')]),test$Attrition)
+confusionMatrix(table(predict(model,test[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager')]),
+                      test$Attrition), mode = "everything")
+
+# Entire case2
+table(predict(model,case2[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager')]),case2$Attrition)
+confusionMatrix(table(predict(model,case2[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager')]),
+                      case2$Attrition), mode = "everything")
+
+table(predict(model,OverSamp[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager')]),OverSamp$Attrition)
+confusionMatrix(table(predict(model,OverSamp[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager')]),
+                      OverSamp$Attrition), mode = "everything")
+
+
+table(predict(model,case2[,c('JobInvolvement', 'MonthlyIncome', 'OverTime')]),case2$Attrition)
+confusionMatrix(table(predict(model,case2[,c('JobInvolvement', 'MonthlyIncome', 'OverTime')]),
+                      case2$Attrition), mode = "everything")
+
+table(predict(model,case2[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'JobRole')]),case2$Attrition)
+confusionMatrix(table(predict(model,case2[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'JobRole')]),
+                      case2$Attrition), mode = "everything")
+
+table(predict(model,case2[,c('JobInvolvement', 'MonthlyIncome', 'YearsSinceLastPromotion', 'JobRole')]),case2$Attrition)
+confusionMatrix(table(predict(model,case2[,c('JobInvolvement', 'MonthlyIncome', 'YearsSinceLastPromotion', 'JobRole')]),
+                      case2$Attrition), mode = "everything")
+
+table(predict(model,OverSamp[,c('JobInvolvement', 'MonthlyIncome', 'YearsSinceLastPromotion', 'JobRole')]),OverSamp$Attrition)
+confusionMatrix(table(predict(model,OverSamp[,c('JobInvolvement', 'MonthlyIncome', 'YearsSinceLastPromotion', 'JobRole')]),
+                      OverSamp$Attrition), mode = "everything")
+
+table(predict(model,case2[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager', 'JobRole')]),case2$Attrition)
+confusionMatrix(table(predict(model,case2[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager', 'JobRole')]),
+                      case2$Attrition), mode = "everything")
+
+table(predict(model,OverSamp[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager', 'JobRole')]),OverSamp$Attrition)
+confusionMatrix(table(predict(model,OverSamp[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager', 'JobRole')]),
+                      OverSamp$Attrition), mode = "everything")
+
+confusionMatrix(table(predict(model,case2[,c('JobInvolvement', 'StockOptionLevel', 'OverTime', 'MaritalStatus', 'JobRole')]),
+                      case2$Attrition), mode = "everything")
+
+confusionMatrix(table(predict(model,OverSamp[,c('JobInvolvement', 'StockOptionLevel', 'OverTime', 'MaritalStatus', 'JobRole')]),
+                      OverSamp$Attrition), mode = "everything")
+
+```
+
+```{r}
+# kNN
+set.seed(123)
+trainIndices = sample(seq(1:dim(OverSamp)[1]),
+                      round(.7*dim(OverSamp)[1]))
+train = OverSamp[trainIndices,]
+test = OverSamp[-trainIndices,]
+head(train)
+head(test)
+classifications = knn(train[,c('MonthlyIncome', 'YearsSinceLastPromotion', 'JobRole')],test[,c('MonthlyIncome', 'YearsSinceLastPromotion', 'JobRole')], train$Attrition, prob = TRUE, k = 5)
+
+confusionMatrix(table(classifications,test$Attrition), mode = "everything")
+
+classifications = knn(train[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager', 'JobRole')],test[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager', 'JobRole')], train$Attrition, prob = TRUE, k = 5)
+
+confusionMatrix(table(classifications,test$Attrition), mode = "everything")
+
+
+# LOOCV
+
+OverSamp$JobRole[OverSamp$JobRole == "Healthcare Representative"] = 0
+OverSamp$JobRole[OverSamp$JobRole == "Human Resources"] = 1
+OverSamp$JobRole[OverSamp$JobRole == "Laboratory Technician"] = 2
+OverSamp$JobRole[OverSamp$JobRole == "Manager"] = 3
+OverSamp$JobRole[OverSamp$JobRole == "Manufacturing Director"] = 4
+OverSamp$JobRole[OverSamp$JobRole == "Research Director"] = 5
+OverSamp$JobRole[OverSamp$JobRole == "Research Scientist"] = 6
+OverSamp$JobRole[OverSamp$JobRole == "Sales Executive"] = 7
+OverSamp$JobRole[OverSamp$JobRole == "Sales Representative"] = 8
+OverSamp$JobRole = as.numeric(OverSamp$JobRole)
+
+OverSamp$MaritalStatus[OverSamp$MaritalStatus == "Divorced"] = 0
+OverSamp$MaritalStatus[OverSamp$MaritalStatus == "Single"] = 1
+OverSamp$MaritalStatus[OverSamp$MaritalStatus == "Married"] = 2
+OverSamp$MaritalStatus = as.numeric(OverSamp$MaritalStatus)
+
+OverSamp$OverTime[OverSamp$OverTime == "Yes"] = 0
+OverSamp$OverTime[OverSamp$OverTime == "No"] = 1
+OverSamp$OverTime = as.numeric(OverSamp$OverTime)
+
+classifications = knn.cv(OverSamp[,c('MonthlyIncome', 'YearsSinceLastPromotion', 'JobRole')],OverSamp$Attrition, k=5)
+
+confusionMatrix(table(classifications, OverSamp$Attrition), mode = "everything")
+
+classifications = knn.cv(OverSamp[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager', 'JobRole')],OverSamp$Attrition, k=5)
+
+confusionMatrix(table(classifications, OverSamp$Attrition), mode = "everything")
+
+### Chosen Attrition model
+classifications = knn.cv(OverSamp[,c('JobInvolvement', 'StockOptionLevel', 'OverTime', 'MaritalStatus', 'JobRole')],OverSamp$Attrition, k=5)
+
+confusionMatrix(table(classifications, OverSamp$Attrition), mode = "everything")
+
+## ?? close to last, more everything except specificity
+classifications = knn.cv(OverSamp[,c('JobInvolvement', 'StockOptionLevel', 'OverTime', 'MaritalStatus', 'JobRole', 'YearsWithCurrManager')],OverSamp$Attrition, k=5)
+
+confusionMatrix(table(classifications, OverSamp$Attrition), mode = "everything")
+
+## From cor test
+classifications = knn.cv(OverSamp[,c('JobInvolvement', 'TotalWorkingYears', 'OverTime', 'JobLevel', 'YearsInCurrentRole')],OverSamp$Attrition, k=5)
+
+confusionMatrix(table(classifications, OverSamp$Attrition), mode = "everything")
+```
+
+```{r}
+
+## Method 2 for imbalanced dataset
+# New Threshold
+summary(case2$Attrition)
+# 16% Yes
+
+# knn
+set.seed(123)
+trainIndices = sample(seq(1:dim(case2)[1]),
+                      round(.7*dim(case2)[1]))
+train = case2[trainIndices,]
+test = case2[-trainIndices,]
+head(train)
+head(test)
+classifications = knn(train[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager', 'JobRole')],test[,c('JobInvolvement', 'MonthlyIncome', 'OverTime', 'YearsWithCurrManager', 'JobRole')], train$Attrition, prob = TRUE, k = 5)
+
+confusionMatrix(table(classifications, test$Attrition), mode = "everything")
+
+# Look at the attributes (Note that probabiliities are all greater than .5)
+classifications # classifcaiton with probabilities
+attributes(classifications) # Look at possible attributes
+attributes(classifications)$prob # Probability of what was classified for that observation
+
+#Get probs of a FRAUD specifically
+probs = ifelse(classifications == "Yes",attributes(classifications)$prob, 1- attributes(classifications)$prob)
+
+NewClass = ifelse(probs > .15, "Yes", "No")
+table(NewClass,test[,2])
+
+NewClass$Attrition = relevel(case2$Attrition, ref = "Yes")
+test$Attrition = relevel(test$Attrition, ref = "Yes")
+
+CM_F = confusionMatrix(table(relevel(as.factor(NewClass), ref = "Yes"),relevel(test[,2],ref = "Yes")), mode = "everything")
+CM_F
+
+Macro_F1_New_Thresh = mean(c(CM_F[4]$byClass["F1"],CM_NF[4]$byClass["F1"]))
+Macro_F1_New_Thresh
+
+```
+
+
+```{r}
+# Run as factor
+case$fAttrition = as.factor(case$Attrition)
+case$BusinessTravel = as.factor(case$BusinessTravel)
+case$Department = as.factor(case$Department)
+case$EducationField = as.factor(case$EducationField)
+case$Gender = as.factor(case$Gender)
+case$JobRole = as.factor(case$JobRole)
+case$MaritalStatus = as.factor(case$MaritalStatus)
+case$OverTime = as.factor(case$OverTime)
+```
+
+
+
+```{r}
+case %>% select(Attrition, JobSatisfaction, JobInvolvement) %>% ggpairs(aes(color = Attrition))
+
+case %>% select(Attrition, MonthlyIncome, JobInvolvement) %>% ggpairs(aes(color = Attrition))
+
+case %>% select(Attrition, RelationshipSatisfaction, JobInvolvement) %>% ggpairs(aes(color = Attrition))
+
+case %>% select(Attrition, RelationshipSatisfaction, YearsWithCurrManager) %>% ggpairs(aes(color = Attrition))
+
+case %>% filter(JobInvolvement == 1) %>% group_by(Attrition) %>% summarise(count=n()) 
+
+
+case %>% select(fAttrition, Age, NumCompaniesWorked) %>% ggpairs(aes(color = fAttrition))
+case %>% select(fAttrition, JobInvolvement, JobSatisfaction) %>% ggpairs(aes(color = fAttrition))
+case %>% select(fAttrition, Age) %>% ggpairs(aes(color = fAttrition))
+cor.test(case$JobInvolvement, case$JobSatisfaction)
+```
