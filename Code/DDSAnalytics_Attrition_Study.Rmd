@@ -1,0 +1,1306 @@
+---
+title: "DDSAnalytics - Attrition Analysis"
+author: "Katon Pang"
+date: 2023-12-23
+output:
+  html_document
+---
+
+```{=html}
+<style type="text/css">
+body{ /* Normal  */ font-size: 16px; color: DarkBlue; }
+td {  /* Table  */ font-size: 8px; }
+h1.title {font-size: 38px; color: DarkRed; }
+h1 { /* Header 1 */ font-size: 28px; color: DarkBlue; }
+h2 { /* Header 2 */ font-size: 22px; color: DarkBlue; }
+h3 { /* Header 3 */ font-size: 20px; color: DarkBlue; }
+code.r{ /* Code block */ font-size: 12px; }
+pre { /* Code block - determines code spacing between lines */ font-size: 14px; }
+</style>
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(RCurl)
+library(ppcor)
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(class)
+library(e1071)
+library(caret)
+library(rstatix)
+
+# Set working directory to project folder
+setwd("C:/Users/katon/Documents/DS 6306/")
+```
+
+# Introduction
+DDSAnalytics is a talent management company serving Fortune 100 companies. Our team was provided with a dataset comprising existing employees of Frito Lay, with the aim of identifying factors contributing to attrition. The dataset includes information on employees, such as attrition status, monthly salary, satisfaction ratings, job roles, departments, etc. The objective of this study is threefold: first, to identify the top three factors contributing to attrition; second, to develop models predicting both attrition and monthly income; and third, to uncover job role-specific trends and other insightful information.  
+
+#### Presentation
+The presentation of this study:   
+https://youtu.be/MTaajBOWc4o   
+
+#### Shiny App
+The link below allows you to explore ratings from employee dataset.  
+https://katonp.shinyapps.io/Attrition/  
+
+## Obtain employee and test datasets from AWS S3
+
+```{r}
+# Getting the employee dataset from S3 URL
+case <- read.table(textConnection(getURL(
+  "https://s3.us-east-2.amazonaws.com/msdsds6306/CaseStudy2-data.csv"
+)), sep=",", header=TRUE)
+## There are 870 observation with 36 variables.
+
+# Getting the new dataset from S3 URL for attrition prediction
+test_attr <- read.table(textConnection(getURL(
+  "https://s3.us-east-2.amazonaws.com/msdsds6306/CaseStudy2CompSet%20No%20Attrition.csv"
+)), sep=",", header=TRUE)
+
+# Getting the new dataset from S3 URL for monthly income prediction
+test_salary <- read.table(textConnection(getURL(
+  "https://s3.us-east-2.amazonaws.com/msdsds6306/CaseStudy2CompSet%20No%20Salary.csv"
+)), sep=",", header=TRUE)
+```
+
+```{r}
+# Summary of data
+summary(case)
+```
+
+Within the 36 variables, the data consists of both qualitative and quantitative variables. Some variables, like YearAtCompany and TotalWorkingYears, exhibit a highly right-skewed distribution.  
+
+```{r}
+# Checking any missing data
+sum(is.na(case))
+```
+There is no missing data in the employee dataset.  
+
+# Attrition
+## Exploratory Data Analysis (EDA)
+### Pairwise correlation
+
+Begin by examining correlation coefficients between Attrition and other variables to gain a general understanding. Subsequently, employ visualization techniques and additional statistical analyses to further explore these relationships.  
+
+```{r}
+# Duplicate the original dataset
+case2 = case
+
+# Change nonnumeric variables into numeric
+case2$Attrition[case2$Attrition == "Yes"] = 0
+case2$Attrition[case2$Attrition == "No"] = 1
+case2$Attrition = as.numeric(case2$Attrition)
+
+case2$BusinessTravel[case2$BusinessTravel == "Non-Travel"] = 0
+case2$BusinessTravel[case2$BusinessTravel == "Travel_Rarely"] = 1
+case2$BusinessTravel[case2$BusinessTravel == "Travel_Frequently"] = 2
+case2$BusinessTravel = as.numeric(case2$BusinessTravel)
+
+case2$Department[case2$Department == "Human Resources"] = 0
+case2$Department[case2$Department == "Research & Development"] = 1
+case2$Department[case2$Department == "Sales"] = 2
+case2$Department = as.numeric(case2$Department)
+
+case2$EducationField[case2$EducationField == "Human Resources"] = 0
+case2$EducationField[case2$EducationField == "Life Sciences"] = 1
+case2$EducationField[case2$EducationField == "Medical"] = 2
+case2$EducationField[case2$EducationField == "Marketing"] = 3
+case2$EducationField[case2$EducationField == "Technical Degree"] = 4
+case2$EducationField[case2$EducationField == "Other"] = 5
+case2$EducationField = as.numeric(case2$EducationField)
+
+case2$Gender[case2$Gender == "Female"] = 0
+case2$Gender[case2$Gender == "Male"] = 1
+case2$Gender = as.numeric(case2$Gender)
+
+case2$JobRole[case2$JobRole == "Healthcare Representative"] = 0
+case2$JobRole[case2$JobRole == "Human Resources"] = 1
+case2$JobRole[case2$JobRole == "Laboratory Technician"] = 2
+case2$JobRole[case2$JobRole == "Manager"] = 3
+case2$JobRole[case2$JobRole == "Manufacturing Director"] = 4
+case2$JobRole[case2$JobRole == "Research Director"] = 5
+case2$JobRole[case2$JobRole == "Research Scientist"] = 6
+case2$JobRole[case2$JobRole == "Sales Executive"] = 7
+case2$JobRole[case2$JobRole == "Sales Representative"] = 8
+case2$JobRole = as.numeric(case2$JobRole)
+
+case2$MaritalStatus[case2$MaritalStatus == "Divorced"] = 0
+case2$MaritalStatus[case2$MaritalStatus == "Single"] = 1
+case2$MaritalStatus[case2$MaritalStatus == "Married"] = 2
+case2$MaritalStatus = as.numeric(case2$MaritalStatus)
+
+case2$OverTime[case2$OverTime == "Yes"] = 0
+case2$OverTime[case2$OverTime == "No"] = 1
+case2$OverTime = as.numeric(case2$OverTime)
+```
+```{r, results='hide'}
+summary(case2)
+str(case2)
+```
+
+There are several variables that either lack distinct characteristics among different employees or serve as identification numbers. These variables will be removed from the data frame 'case2' before conducting further analysis. The identified variables are as follows:  
+
+ID: Identification variable  
+EmployeeCount: All 1’s  
+EmployeeNumber: Identification Variable  
+StandardHours: All 80’s  
+Over18: All Yes's  
+
+```{r}
+# Remove column ID, EmployeeCount, EmployeeNumber, Over18, and StandardHours
+case2$ID <- c()
+case2$EmployeeCount <- c()
+case2$EmployeeNumber <- c()
+case2$Over18 <- c()
+case2$StandardHours <-c()
+
+```
+```{r}
+# Pairwise correlations
+cor_matrix <- cor_mat(case2)
+# Display with p-values
+cor_p = cor_matrix %>% cor_gather()
+# See Attrition only
+Acor_p = cor_p %>% filter(var2 == "Attrition")
+# Arrange by the absolute value of correlation coefficients in descending order
+Acor_p = arrange(Acor_p, desc(abs(cor)))
+# The top 10 variables of the list
+Acor_p[2:11,]
+
+```
+### Graphs and statistical analysis
+We will further investigate the top 10 variables, which exhibit the highest correlation coefficients, along with other interesting variables listed below.  
+
+Several common top reasons of employees attrition, along with the related variables from the dataset:  
+1. Lack of purpose / boredom: JobInvolvement, JobSatisfaction  
+2. Poor Compensation: Monthly Income  
+3. Overworked: OverTime  
+4. Poor work/life balance: WorkLifeBalance, DistanceFromHome, BusinessTravel  
+5. Bad Managers: RelationshipSatisfication, YearsWithCurrManager  
+
+```{r}
+# Employees Attrition Rate
+case %>% group_by(Attrition) %>% summarise(Count=n()) %>% mutate(attr_pct=round(prop.table(Count),2) * 100) %>% 
+ggplot(aes(x=Attrition, y=attr_pct, fill = Attrition)) + geom_bar(stat="identity") + geom_text(aes(label= sprintf("%.2f%%", attr_pct)), vjust=-0.5, size=3) + labs(x="Employee Attrition", y="Percentage", title="Employee Attrition Rate (%)") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+```
+
+This dataset is imbalanced, with only 16% (140 out of 870) of employees marked as 'Yes' in the Attrition category. We will address this imbalance by employing oversampling during the training and validation stages of the attrition models.  
+
+```{r}
+# Attrition by OverTime
+# Total number of employees based on OverTime
+Attr_OT = case %>% select(OverTime, Attrition) %>% group_by(OverTime) %>% summarise(count=n())
+
+# Find out the number of each Attrition status based on OverTime
+# Combine the result with Attr_OT data frame
+Attr_OT <- cbind(Attr_OT,as.data.frame.matrix(table(case$OverTime, case$Attrition)))
+
+# Make Attr_OT into long dataset
+Attr_OT_long <- gather(Attr_OT, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_OT_long$pct = Attr_OT_long$Qty / Attr_OT_long$count *100
+
+# Create the barplot
+Attr_OT_long %>% ggplot(aes(x=OverTime, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="OverTime", y="Percentage", title="Employee Attrition (%) by OverTime") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+
+# Comparing Overtime distributions between the overall workforce and the attrition group. 
+Comp = Attr_OT
+Comp$Overall = Comp$count/870*100
+Comp$Attition = Comp$Yes/140*100
+Comp_long <- gather(Comp, Population, Pct, c(Overall,Attition))
+
+# Create the barplot
+Comp_long %>% ggplot(aes(x=OverTime, y=Pct, fill=Population, label=Pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", Pct)), position=position_dodge(0.8), vjust=-0.5, size=3)  + labs(x="OverTime", y="Percentage", title="OverTime Distribution: Attrition vs. Overall Workforce") + theme_minimal() +  scale_fill_manual(values = c("salmon", "royalblue"))
+
+```
+
+31.7% of employees who worked overtime left the company, compared to 9.7% of those who did not. Additionally, 57% of the employees who left the company had worked overtime. This underscores overtime as one of the top contributing factors to employee attrition.  
+
+```{r}
+# Attrition by Stock Option Level
+# Total number of employees based on Stock Option Level
+Attr_SO = case %>% select(StockOptionLevel, Attrition) %>% group_by(StockOptionLevel) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each Stock Option Level
+# Combine the result with Attr_SO data frame
+Attr_SO <- cbind(Attr_SO,as.data.frame.matrix(table(case$StockOptionLevel, case$Attrition)))
+
+# Make Attr_SO into long dataset
+Attr_SO_long <- gather(Attr_SO, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_SO_long$pct = Attr_SO_long$Qty / Attr_SO_long$count *100
+
+# Create the barplot
+Attr_SO_long %>% ggplot(aes(x=StockOptionLevel, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="Stock Option Level", y="Percentage", title="Employee Attrition (%) by Stock Option Level") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+```
+
+For the variable StockOptionLevel, where level 0 represents the lowest stock option possession and level 3 represents the highest, the bar plot shows significant differences in the percentages of employees who left the company across all stock option levels. Notably, levels 0 and 3 exhibit higher percentages (25.9% and 21.8%, respectively) compared to levels 1 and 2, which have lower percentages of 7.6% and 3.7%, respectively.  
+
+```{r}
+# Comparing Stock Option Level distributions between the overall workforce and the attrition group. 
+Comp = Attr_SO
+Comp$Overall = Comp$count/870*100
+Comp$Attition = Comp$Yes/140*100
+Comp_long <- gather(Comp, Population, Pct, c(Overall,Attition))
+
+# Create the barplot
+Comp_long %>% ggplot(aes(x=StockOptionLevel, y=Pct, fill=Population, label=Pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", Pct)), position=position_dodge(0.8), vjust=-0.5, size=3)  + labs(x="Stock Option Level", y="Percentage", title="Stock Option Level Distribution: Attrition vs. Overall Workforce") + theme_minimal() + scale_fill_manual(values = c("salmon", "royalblue"))
+```
+
+The percentage of employees who left the company at stock option level 0 is significantly higher than the corresponding percentage for this level across the entire company. This suggests that employees with the lowest stock option possession were more likely to leave the company in terms of composition.  
+
+Notably, 70% of employees who left the company were at the lowest stock option level. This underscores stock option level as one of the top indicative factors in employee attrition.  
+
+```{r}
+# Attrition by Job Involvement
+# Total number of employees in each Job Involvement rating
+Attr_JI = case %>% select(JobInvolvement, Attrition) %>% group_by(JobInvolvement) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each Job Involvement rating
+# Combine the result with Attr_JI data frame
+Attr_JI <- cbind(Attr_JI,as.data.frame.matrix(table(case$JobInvolvement, case$Attrition)))
+
+# Make Attr_JI into long dataset
+Attr_JI_long <- gather(Attr_JI, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_JI_long$pct = Attr_JI_long$Qty / Attr_JI_long$count *100
+
+# Create the barplot
+Attr_JI_long %>% ggplot(aes(x=JobInvolvement, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="Job Involvement", y="Percentage", title="Employee Attrition (%) by Job Involvement") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+```
+
+For the variable JobInvolvement, where level 1 represents the lowest job involvement rating and level 4 represents the highest, 47% of individuals rated level 1 left the company. This percentage is significantly higher than those observed in the other levels.
+
+```{r}
+# Comparing Job Involvement distributions between the overall workforce and the attrition group. 
+Comp = Attr_JI
+Comp$Overall = Comp$count/870*100
+Comp$Attition = Comp$Yes/140*100
+Comp_long <- gather(Comp, Population, Pct, c(Overall,Attition))
+
+# Create the barplot
+Comp_long %>% ggplot(aes(x=JobInvolvement, y=Pct, fill=Population, label=Pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", Pct)), position=position_dodge(0.8), vjust=-0.5, size=3)  + labs(x="Job Involvement", y="Percentage", title="Job Involvement Distribution: Attrition vs. Overall Workforce") + theme_minimal() +  scale_fill_manual(values = c("salmon", "royalblue"))
+```
+
+The percentage of employees who left the company and rated their job involvement at levels 1 or 2 was higher than the corresponding percentage across the entire company. This suggests that those with lower job involvement experienced a relatively higher attrition rate.  
+
+Notably, 47% of departing employees rated their job involvement at levels 1 or 2. This underscores job involvement as one of the top contributing factors to employee attrition.  
+
+```{r}
+# Attrition by Job Satisfaction
+# Total number of employees in each Job Satisfaction
+Attr_JB = case %>% select(JobSatisfaction, Attrition) %>% group_by(JobSatisfaction) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each Job Satisfaction
+# Combine the result with Attr_JB data frame
+Attr_JB <- cbind(Attr_JB,as.data.frame.matrix(table(case$JobSatisfaction, case$Attrition)))
+
+# Make Attr_JB into long dataset
+Attr_JB_long <- gather(Attr_JB, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_JB_long$pct = Attr_JB_long$Qty / Attr_JB_long$count *100
+
+# Create the barplot
+Attr_JB_long %>% ggplot(aes(x=JobSatisfaction, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="Job Satisfaction", y="Percentage", title="Employee Attrition (%) by Job Satisfaction") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+```
+
+Compared to Job Involvement, there is less difference between each level in Job Satisfaction. Ranging from level 1 to 4, where level 1 symbolizes the least job satisfaction, the percentages of 'Yes' Attrition are 21.2%, 18.7%, 16.9%, and 10.3%, respectively.  
+
+```{r}
+# Attrition by Department
+# Total number of employees based on Department
+Attr_D = case %>% select(Department, Attrition) %>% group_by(Department) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each Department
+# Combine the result with Attr_D data frame
+Attr_D <- cbind(Attr_D,as.data.frame.matrix(table(case$Department, case$Attrition)))
+
+# Make Attr_D into long dataset
+Attr_D_long <- gather(Attr_D, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_D_long$pct = Attr_D_long$Qty / Attr_D_long$count *100
+
+# Create the barplot
+Attr_D_long %>% ggplot(aes(x=Department, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.7, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.7), vjust=-0.5, size=3) + labs(x="Department", y="Percentage", title="Employee Attrition (%) by Department") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+
+```
+
+The bar plot indicates that the attrition rate in the Sales department (21.6%) is higher than that in the Human Resources (17.1%), which, in turn, is higher than that in Research & Development (13.3%).  
+
+```{r include=FALSE}
+# Comparing Department distributions between the overall workforce and the attrition group. 
+Comp = Attr_D
+Comp$Overall = Comp$count/870*100
+Comp$Attition = Comp$Yes/140*100
+Comp_long <- gather(Comp, Population, Pct, c(Overall,Attition))
+
+# Create the barplot
+Comp_long %>% ggplot(aes(x=Department, y=Pct, fill=Population, label=Pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", Pct)), position=position_dodge(0.8), vjust=-0.5, size=3)  + labs(x="Department", y="Percentage", title="Department Distribution: Attrition vs. Overall Workforce") + theme_minimal() +  scale_fill_manual(values = c("salmon", "royalblue"))
+```
+
+```{r}
+# Attrition by Work Life Balance
+# Total number of employees based on Work Life Balance
+Attr_WLB = case %>% select(WorkLifeBalance, Attrition) %>% group_by(WorkLifeBalance) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each Work Life Balance
+# Combine the result with Attr_WLB data frame
+Attr_WLB <- cbind(Attr_WLB,as.data.frame.matrix(table(case$WorkLifeBalance, case$Attrition)))
+
+# Make Attr_WLB into long dataset
+Attr_WLB_long <- gather(Attr_WLB, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_WLB_long$pct = Attr_WLB_long$Qty / Attr_WLB_long$count *100
+
+# Create the barplot
+Attr_WLB_long %>% ggplot(aes(x=WorkLifeBalance, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="Work Life Balance", y="Percentage", title="Employee Attrition (%) by Work Life Balance") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+```
+
+For the variable WorkLifeBalance, where level 1 represents the least work-life balance and level 4 represents the most, the percentage of employees who rated their work-life balance at level 1 and left the company (35.4%) significantly differs from those at levels 2 (15.6%), 3 (15.0%), and 4 (13.3%). This suggests that employees with the least work/life balance were more likely to leave the company than their counterparts.  
+
+```{r}
+# Attrition by Business Travel
+# Total number of employees based on BusinessTravel
+Attr_BT = case %>% select(BusinessTravel, Attrition) %>% group_by(BusinessTravel) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each BusinessTravel
+# Combine the result with Attr_BT data frame
+Attr_BT <- cbind(Attr_BT,as.data.frame.matrix(table(case$BusinessTravel, case$Attrition)))
+
+# Make Attr_BT into long dataset
+Attr_BT_long <- gather(Attr_BT, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_BT_long$pct = Attr_BT_long$Qty / Attr_BT_long$count *100
+
+# Create the barplot
+Attr_BT_long %>% ggplot(aes(x=BusinessTravel, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="Business Travel", y="Percentage", title="Employee Attrition (%) by Business Travel") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+```
+
+The percentage of employees who traveled frequently and left the company (22.2%) was higher than for those who traveled rarely (15.2%), which, in turn, was higher than for those who did not travel for business (11.7%).  
+
+Considering the potential impact of frequent work-related travel on work/life balance, this supports the trend that employees with the least work/life balance were more likely to leave the company than their counterparts.  
+
+```{r}
+# Attrition by EnvironmentSatisfaction
+# Total number of employees based on EnvironmentSatisfaction
+Attr_ES = case %>% select(EnvironmentSatisfaction, Attrition) %>% group_by(EnvironmentSatisfaction) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each EnvironmentSatisfaction
+# Combine the result with Attr_ES data frame
+Attr_ES <- cbind(Attr_ES,as.data.frame.matrix(table(case$EnvironmentSatisfaction, case$Attrition)))
+
+# Make Attr_ES into long dataset
+Attr_ES_long <- gather(Attr_ES, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_ES_long$pct = Attr_ES_long$Qty / Attr_ES_long$count *100
+
+# Create the barplot
+Attr_ES_long %>% ggplot(aes(x=EnvironmentSatisfaction, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="Environment Satisfaction", y="Percentage", title="Employee Attrition (%) by Environment Satisfaction") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+
+# Comparing Environment Satisfaction distributions between the overall workforce and the attrition group.
+Comp = Attr_ES
+Comp$Overall = Comp$count/870*100
+Comp$Attition = Comp$Yes/140*100
+Comp_long <- gather(Comp, Population, Pct, c(Overall,Attition))
+
+# Create the barplot
+Comp_long %>% ggplot(aes(x=EnvironmentSatisfaction, y=Pct, fill=Population, label=Pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", Pct)), position=position_dodge(0.8), vjust=-0.5, size=3)  + labs(x="Environment Satisfaction", y="Percentage", title="Environment Satisfaction Distribution: Attrition vs. Overall Workforce") + theme_minimal() +  scale_fill_manual(values = c("salmon", "royalblue"))
+```
+
+For the variable EnvironmentSatisfaction, where level 1 symbolizes the least satisfaction and level 4 symbolizes the most:   
+
+The first bar plot indicates a notable difference in the percentage of employees who rated environment satisfaction at level 1 and left the company (24.4%), compared to levels 2 (13.5%), 3 (13.6%), and 4 (14.9%). The second bar plot further shows that the percentage of employees leaving the company and rating environment satisfaction at level 1 is higher than the corresponding percentage of level 1 across the entire company. This suggests that those expressing the least satisfaction with their work environment had a relatively higher attrition rate.  
+
+Notably, 30% of those who left the company rated their environment satisfaction at level 1, emphasizing that employees with the least satisfaction were more likely to leave than their counterparts.    
+
+```{r}
+# Attrition by Marital Status
+# Total number of employees based on Marital Status
+Attr_MS = case %>% select(MaritalStatus, Attrition) %>% group_by(MaritalStatus) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each Marital Status
+# Combine the result with Attr_MS data frame
+Attr_MS <- cbind(Attr_MS,as.data.frame.matrix(table(case$MaritalStatus, case$Attrition)))
+
+# Make Attr_MS into long dataset
+Attr_MS_long <- gather(Attr_MS, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_MS_long$pct = Attr_MS_long$Qty / Attr_MS_long$count *100
+
+# Create the barplot
+Attr_MS_long %>% ggplot(aes(x=MaritalStatus, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="Marital Status", y="Percentage", title="Employee Attrition (%) by Marital Status") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+```
+
+The percentage of employees who were single and left the company (26%) significantly differs from those who were married (14.1%) and those who were divorced (6.3%).  
+
+```{r}
+# Comparing Marital Status distributions between the overall workforce and the attrition group.
+Comp = Attr_MS
+Comp$Overall = Comp$count/870*100
+Comp$Attition = Comp$Yes/140*100
+Comp_long <- gather(Comp, Population, Pct, c(Overall,Attition))
+
+# Create the barplot
+Comp_long %>% ggplot(aes(x=MaritalStatus, y=Pct, fill=Population, label=Pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", Pct)), position=position_dodge(0.8), vjust=-0.5, size=3)  + labs(x="Marital Status", y="Percentage", title="Marital Status Distribution: Attrition vs. Overall Workforce") + theme_minimal() +  scale_fill_manual(values = c("salmon", "royalblue"))
+```
+
+The percentage of employees who left the company and were single was significantly higher than the corresponding percentage of singles across the entire company. This suggests that, in terms of composition, single individuals experienced a relatively higher attrition rate.  
+
+Notably, 50% of those who left the company were single, underscoring marital status as one of the top indicative factors in employee attrition.  
+
+```{r}
+# Boxplot - TotalWorkingYears by attrition
+case %>% ggplot(aes(x = Attrition, y = TotalWorkingYears, fill = Attrition)) + geom_boxplot(width = 0.3, show.legend = FALSE) + labs(x="Attrition", y="Total Working Years", title="Total Working Years by Attrition") + theme_minimal() + scale_fill_manual(values = c("cornflowerblue", "salmon"))
+
+# Run a t-test on attrition status means
+A_yes = as.data.frame(case$TotalWorkingYears[case$Attrition == "Yes"])
+A_No = as.data.frame(case$TotalWorkingYears[case$Attrition == "No"])
+
+t.test(x = A_yes, y = A_No, conf.int = .95, alternative = "two.sided")
+
+# Find medians
+case %>%  group_by(Attrition) %>% summarize(MedianTotalWorkingYears = median(TotalWorkingYears))
+```
+
+There is evidence to suggest that the mean total working years of employees who left the company is different from the mean total working years of those who stayed (p-value < 0.0001 < 0.05 from Welch's t-test).   
+Median "Yes" ~ 6.5 years   
+Median "No" ~ 10 years   
+
+Employees in the early stages of their careers were more likely to leave.  
+
+```{r}
+# Boxplot - Age by attrition
+case %>% ggplot(aes(x = Attrition, y = Age, fill = Attrition)) + geom_boxplot(width = 0.3, show.legend = FALSE) + labs(x="Attrition", y="Age", title="Age by Attrition") + theme_minimal() + scale_fill_manual(values = c("cornflowerblue", "salmon"))
+
+# Run a t-test on attrition status means
+A_yes = as.data.frame(case$Age[case$Attrition == "Yes"])
+A_No = as.data.frame(case$Age[case$Attrition == "No"])
+
+t.test(x = A_yes, y = A_No, conf.int = .95, alternative = "two.sided")
+
+# Find medians
+case %>%  group_by(Attrition) %>% summarize(MedianAge = median(Age))
+```
+
+There is sufficient evidence to suggest that the mean age of employees who left the company is different from the mean age of those who stayed (p-value < 0.0001 < 0.05 from Welch's t-test).  
+Median of "Yes": 32 years  
+Median of "No": 36 years   
+
+Building on the previously mentioned factor, younger employees in the earlier stages of their careers were more likely to leave.  
+
+```{r}
+# Age vs. Attrition -- Generation vs. Attrition
+case$Generation <- ifelse(case$Age<37,"Millennials",
+ifelse(case$Age>=37 & case$Age<53,"Gen X","Baby Boomers"))
+case$Generation = as.factor(case$Generation)
+
+# Total number of employees in each generation
+Attr_Gen = case %>% select(Generation, Attrition) %>% group_by(Generation) %>% summarise(count=n())
+
+# Find out percentage of Attrition for each generation
+Attr_Gen <- cbind(Attr_Gen,as.data.frame.matrix(table(case$Generation, case$Attrition)))
+
+# Make Attr_Gen into long dataset
+Attr_Gen_long <- gather(Attr_Gen, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_Gen_long$pct = Attr_Gen_long$Qty / Attr_Gen_long$count *100
+
+# Create the barplot
+Attr_Gen_long %>% ggplot(aes(x=Generation, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="Generation", y="Percentage", title="Employee Attrition (%) by Generation") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+
+# Comparing Generation distributions between the overall workforce and the attrition group.
+Comp = Attr_Gen
+Comp$Overall = Comp$count/870*100
+Comp$Attition = Comp$Yes/140*100
+Comp_long <- gather(Comp, Population, Pct, c(Overall,Attition))
+
+# Create the barplot
+Comp_long %>% ggplot(aes(x=Generation, y=Pct, fill=Population, label=Pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", Pct)), position=position_dodge(0.8), vjust=-0.5, size=3)  + labs(x="Generation", y="Percentage", title="Generation Distribution: Attrition vs. Overall Workforce") + theme_minimal() +  scale_fill_manual(values = c("salmon", "royalblue"))
+```
+
+The percentage of Millennials (20.6%) leaving the company was higher than that of Baby Boomers (11.8%) and Gen X (10.2%), as shown in the first bar plot. The second plot indicates that the percentage of departing employees who were Millennials exceeded the corresponding percentage of Millennials across the entire company. This suggests that, in terms of composition, Millennials experienced a higher attrition rate.  
+
+Notably, 70% of those who left the company were Millennials, emphasizing age/generation as one of the top influencing factors in employee attrition.     
+
+```{r}
+# Attrition by Relationship Satisfaction
+# Total number of employees in each Relationship Satisfaction
+Attr_RS = case %>% select(RelationshipSatisfaction, Attrition) %>% group_by(RelationshipSatisfaction) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each Relationship Satisfaction
+# Combine the result with Attr_RS data frame
+Attr_RS <- cbind(Attr_RS,as.data.frame.matrix(table(case$RelationshipSatisfaction, case$Attrition)))
+
+# Make Attr_RS into long dataset
+Attr_RS_long <- gather(Attr_RS, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_RS_long$pct = Attr_RS_long$Qty / Attr_RS_long$count *100
+
+# Create the barplot
+Attr_RS_long %>% ggplot(aes(x=RelationshipSatisfaction, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.5, size=3) + labs(x="Relationship Satisfaction", y="Percentage", title="Employee Attrition (%) by Relationship Satisfaction") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+
+# Comparing Relationship Satisfaction distributions between the overall workforce and the attrition group.
+Comp = Attr_RS
+Comp$Overall = Comp$count/870*100
+Comp$Attition = Comp$Yes/140*100
+Comp_long <- gather(Comp, Population, Pct, c(Overall,Attition))
+
+# Create the barplot
+Comp_long %>% ggplot(aes(x=RelationshipSatisfaction, y=Pct, fill=Population, label=Pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", Pct)), position=position_dodge(0.8), vjust=-0.5, size=3)  + labs(x="Relationship Satisfaction", y="Percentage", title="Relationship Satisfaction Distribution: Attrition vs. Overall Workforce") + theme_minimal() +  scale_fill_manual(values = c("salmon", "royalblue"))
+
+```
+
+For the variable RelationshipSatisfaction, where level 1 symbolizes the least satisfaction with the manager and level 4 symbolizes the most:   
+
+The first bar plot indicates that the percentage of employees who left the company after rating their relationship satisfaction at level 1 (20.1%) is higher than those in levels 2 (15.8%), 3 (13.8%), and 4 (15.9%).  
+
+According to the second bar plot, the percentage of employees (25%) who left the company and rated their relationship satisfaction at level 1 was also higher than the corresponding percentage for those across the entire company. This implies that, in terms of composition, those who rated their relationship satisfaction the least experienced a relatively higher attrition rate.  
+
+```{r}
+# Boxplot - YearsInCurrentRole by attrition
+case %>% ggplot(aes(x = Attrition, y = YearsInCurrentRole, fill = Attrition)) + geom_boxplot(width = 0.3, show.legend = FALSE) + labs(x="Attrition", y="Years In Current Role", title="Years In Current Role by Attrition") + theme_minimal() + scale_fill_manual(values = c("cornflowerblue", "salmon"))
+
+# Run a t-test on attrition status means
+A_yes = as.data.frame(case$YearsInCurrentRole[case$Attrition == "Yes"])
+A_No = as.data.frame(case$YearsInCurrentRole[case$Attrition == "No"])
+
+t.test(x = A_yes, y = A_No, conf.int = .95, alternative = "two.sided")
+
+# Find Medians
+case %>%  group_by(Attrition) %>% summarize(MedianYearsInCurrentRole = median(YearsInCurrentRole))
+```
+
+There is evidence to suggest that the mean years in current role in the "Yes" Attrition group is different from the mean years in current role in the "No" Attrition group (p-value < 0.0001 < 0.05 from Welch's t-test).   
+Median "Yes" ~ 2 years   
+Median "No" ~ 3 years   
+However, it's worth noting that the difference in medians was not practically significant.  
+
+
+```{r}
+# Boxplot - YearsAtCompany by attrition
+case %>% ggplot(aes(x = Attrition, y = YearsAtCompany, fill = Attrition)) + geom_boxplot(width = 0.3, show.legend = FALSE) + labs(x="Attrition", y="Years At Company", title="Years At Company by Attrition") + theme_minimal() + scale_fill_manual(values = c("cornflowerblue", "salmon"))
+
+# Run a t-test on attrition status means
+A_yes = as.data.frame(case$YearsAtCompany[case$Attrition == "Yes"])
+A_No = as.data.frame(case$YearsAtCompany[case$Attrition == "No"])
+
+t.test(x = A_yes, y = A_No, conf.int = .95, alternative = "two.sided")
+
+# Find Medians
+case %>%  group_by(Attrition) %>% summarize(MedianYearsAtCompany = median(YearsAtCompany))
+```
+
+There is strong evidence to suggest that the mean years at company of the "Yes" Attrition group is different from the mean years at company of the "No" Attrition group (p-value = 0.0002563 < 0.05 from Welch's t-test).   
+
+Median of "Yes" = 3   
+Median of "No" = 6    
+
+The median years at the company for employees who left were shorter than for those who stayed. Employees who stayed were more likely to have been with the company for a longer duration compared to those who left.     
+
+```{r}
+# Boxplot - YearsWithCurrManager by attrition
+case %>% ggplot(aes(x = Attrition, y = YearsWithCurrManager, fill = Attrition)) + geom_boxplot(width = 0.3, show.legend = FALSE) + labs(x="Attrition", y="Years With Current Manager", title="Years With Current Manager by Attrition") + theme_minimal() + scale_fill_manual(values = c("cornflowerblue", "salmon"))
+
+# Run a t-test on attrition status means
+A_yes = as.data.frame(case$YearsWithCurrManager[case$Attrition == "Yes"])
+A_No = as.data.frame(case$YearsWithCurrManager[case$Attrition == "No"])
+
+t.test(x = A_yes, y = A_No, conf.int = .95, alternative = "two.sided")
+
+# Find Medians
+case %>%  group_by(Attrition) %>% summarize(MedianYearsWithCurrManager = median(YearsWithCurrManager))
+```
+
+There is evidence to suggest that the mean years with current manager of the "Yes" Attrition group is different from the mean years with current manager of the "No" Attrition group (p-value < 0.0001 < 0.05 from Welch's t-test).   
+Median of "Yes" = 2 years   
+Median of "No" = 3 years  
+However, it's worth noting that the difference in medians was not practically significant.  
+
+```{r}
+# Boxplot - MonthlyIncome by attrition
+case %>% ggplot(aes(x = Attrition, y = MonthlyIncome, fill = Attrition)) + geom_boxplot(width = 0.3, show.legend = FALSE) + labs(x="Attrition", y="Monthly Income", title="Monthly Income by Attrition") + theme_minimal() + scale_y_continuous(labels = scales::dollar_format()) + scale_fill_manual(values = c("cornflowerblue", "salmon"))
+
+# Run a t-test on attrition status means
+Income_yes = as.data.frame(case$MonthlyIncome[case$Attrition == "Yes"])
+Income_No = as.data.frame(case$MonthlyIncome[case$Attrition == "No"])
+
+t.test(x = Income_yes, y = Income_No, conf.int = .95, alternative = "two.sided")
+
+# Find Medians
+case %>%  group_by(Attrition) %>% summarize(MedianMonthlyIncome = median(MonthlyIncome))
+```
+
+There is strong evidence to suggest that the mean monthly income of the "Yes" Attrition group is different from the mean monthly income of the "No" Attrition group (p-value < 0.0001 < 0.05 from Welch's t-test).   
+The mean and median monthly income of the employees who left were lower than the mean and median monthly income of those who stayed.     
+
+Mean of "Yes" = $4765   
+Mean of "No" = $6702  
+Median of "Yes" = $3171   
+Median of "No" = $5208  
+
+One of the top reasons employees left their current company is due to low compensation.   
+
+```{r}
+# Attrition by JobLevel
+# Total number of employees based on JobLevel
+Attr_JL = case %>% select(JobLevel, Attrition) %>% group_by(JobLevel) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each JobLevel
+# Combine the result with Attr_JL data frame
+Attr_JL <- cbind(Attr_JL,as.data.frame.matrix(table(case$JobLevel, case$Attrition)))
+
+# Make Attr_JL into long dataset
+Attr_JL_long <- gather(Attr_JL, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_JL_long$pct = Attr_JL_long$Qty / Attr_JL_long$count *100
+
+# Create the barplot
+Attr_JL_long %>% ggplot(aes(x=JobLevel, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.8), vjust=-0.8, size=3)  + labs(x="Job Level", y="Percentage", title="Employee Attrition (%) by Job Level") + theme_minimal() + scale_fill_manual(values = c("royalblue", "salmon"))
+
+# Comparing Job Level distributions between the overall workforce and the attrition group.
+Comp = Attr_JL
+Comp$Overall = Comp$count/870*100
+Comp$Attition = Comp$Yes/140*100
+Comp_long <- gather(Comp, Population, Pct, c(Overall,Attition))
+
+# Create the barplot
+Comp_long %>% ggplot(aes(x=JobLevel, y=Pct, fill=Population, label=Pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", Pct)), position=position_dodge(0.8), vjust=-0.5, size=3)  + labs(x="Job Level", y="Percentage", title="Job Level Distribution: Attrition vs. Overall Workforce") + theme_minimal() +  scale_fill_manual(values = c("salmon", "royalblue"))
+
+```
+
+For the variable JobLevel, where level 1 symbolizes the lowest job level and level 4 symbolizes the highest:  
+
+The first bar plot indicates that 26% of employees at job level 1 left the company, notably higher than other levels, suggesting that those at the lowest job level were more likely to leave. This aligns with the strong correlation between monthly income and job level, supporting the observation that those who left had a lower median monthly income.  
+
+The second bar plot reinforces this, showing that the percentage of employees who left and were at job level 1 was significantly higher than the corresponding percentage for job level 1 across the entire company. This implies that individuals in job level 1 had a relatively higher attrition rate.  
+
+Notably, 61.4% of employees who left were at job level 1, emphasizing job level as one of the top contributing factors to employee attrition.    
+
+```{r}
+# Attrition by Gender
+# Total number of employees based on Gender
+Attr_G = case %>% select(Gender, Attrition) %>% group_by(Gender) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each Gender
+# Combine the result with Attr_G data frame
+Attr_G <- cbind(Attr_G,as.data.frame.matrix(table(case$Gender, case$Attrition)))
+
+# Make Attr_G into long dataset
+Attr_G_long <- gather(Attr_G, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_G_long$pct = Attr_G_long$Qty / Attr_G_long$count *100
+
+# Create the barplot
+Attr_G_long %>% ggplot(aes(x=Gender, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.5, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.5), vjust=-0.5, size=3) + labs(x="Gender", y="Percentage", title="Employee Attrition (%) by Gender") + theme_minimal() +scale_fill_manual(values = c("royalblue", "salmon"))
+
+# Comparing Gender distributions between the overall workforce and the attrition group.
+Comp = Attr_G
+Comp$Overall = Comp$count/870*100
+Comp$Attition = Comp$Yes/140*100
+Comp_long <- gather(Comp, Population, Pct, c(Overall,Attition))
+
+# Create the barplot
+Comp_long %>% ggplot(aes(x=Gender, y=Pct, fill=Population, label=Pct)) + geom_col(width=0.5, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", Pct)), position=position_dodge(0.5), vjust=-0.5, size=3)  + labs(x="Gender", y="Percentage", title="Gender Distribution: Attrition vs. Overall Workforce") + theme_minimal() +  scale_fill_manual(values = c("salmon", "royalblue"))
+
+```
+
+The first bar plot indicates a slightly higher attrition rate among male employees (16.9%) compared to females (15.0%).  
+
+The second bar plot shows that the percentage of employees who left and were male (62%) is slightly higher than the corresponding percentage of male employees across the entire company (59%). This supports the observation of a slightly higher attrition rate among male employees.  
+  
+  
+### Job Role specific trends  
+
+```{r, results='hide'}
+# See JobRole only, from pairwise correlation conducted earlier.
+Jcor_p = cor_p %>% filter(var2 == "JobRole")
+# Arrange by the absolute value of correlation coefficients in descending order
+Jcor_p = arrange(Jcor_p, desc(abs(cor)))
+# The top 10 variables of the list
+Jcor_p[2:11,]
+```
+
+```{r fig.height = 4.8}
+# Attrition by JobRole
+# Total number of employees based on JobRole
+Attr_JR = case %>% select(JobRole, Attrition) %>% group_by(JobRole) %>% summarise(count=n())
+
+# Find out the number of each Attrition status for each JobRole
+# Combine the result with Attr_JR data frame
+Attr_JR <- cbind(Attr_JR,as.data.frame.matrix(table(case$JobRole, case$Attrition)))
+
+# Make Attr_JR into long dataset
+Attr_JR_long <- gather(Attr_JR, Attrition, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+Attr_JR_long$pct = Attr_JR_long$Qty / Attr_JR_long$count *100
+
+# Create the barplot
+Attr_JR_long %>% ggplot(aes(x=JobRole, y=pct, fill=Attrition, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.9), vjust=-0.5, size=2.5) + ylim(0,110) + labs(x="Job Role", y="Percentage", title="Employee Attrition (%) by Job Role") + theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=1)) +  scale_fill_manual(values = c("royalblue", "salmon"))
+
+# Comparing Job Role distributions between the overall workforce and the attrition group
+Comp = Attr_JR
+Comp$Overall = Comp$count/870*100
+Comp$Attition = Comp$Yes/140*100
+Comp_long <- gather(Comp, Population, Pct, c(Overall,Attition))
+
+# Create the barplot
+Comp_long %>% ggplot(aes(x=JobRole, y=Pct, fill=Population, label=Pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", Pct)), position=position_dodge(0.9), vjust=-0.5, size=2.5)  + labs(x="JobRole", y="Percentage", title="Job Role Distribution: Attrition vs. Overall Workforce") + theme_minimal() +  scale_fill_manual(values = c("salmon", "royalblue")) + theme(axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=1))
+
+```
+
+The first bar plot reveals that the percentage of Sales Representatives who left the company (45.3%) was the highest and significantly higher than the percentages of other job roles. Notably, the percentages of Research Directors (2.0%), Manufacturing Directors (2.3%), and Managers (7.8%) who left the company were the lowest among the job roles.  
+
+According to the second bar plot, the percentage of employees who left the company and were Sales Representatives (17%) was notably higher than the corresponding percentage for those across the entire company (6%), exhibiting the most difference (11%) in terms of composition compared to other job roles.   
+
+Notably, the percentages of employees who left the company and were Human Resources, Laboratory Technician, and Research Scientist were also higher than their corresponding percentages across the entire company.   
+
+Job role is one of the top indicative factors in employee attrition.   
+
+```{r fig.height = 4.8}
+# OverTime by JobRole
+# Total number of employees based on JobRole
+OT_JR = case %>% select(JobRole, OverTime) %>% group_by(JobRole) %>% summarise(count=n())
+
+# Find out the number of each OverTime status for each JobRole
+# Combine the result with OT_JR data frame
+OT_JR <- cbind(OT_JR,as.data.frame.matrix(table(case$JobRole, case$OverTime)))
+
+# Make OT_JR into long dataset
+OT_JR_long <- gather(OT_JR, OverTime, Qty, c(Yes,No))
+# Add column and calculate the percentage of attrition
+OT_JR_long$pct = OT_JR_long$Qty / OT_JR_long$count *100
+
+# Create the barplot
+OT_JR_long %>% ggplot(aes(x=JobRole, y=pct, fill=OverTime, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", pct)), position=position_dodge(0.9), vjust=-0.5, size=2.5) + ylim(0,90) + labs(x="Job Role", y="Percentage", title="OverTime by Job Role") + theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=1)) +  scale_fill_manual(values = c("royalblue", "salmon"))
+
+# Comparing Job Role distributions between the overall workforce and OverTime
+Comp = OT_JR
+Comp$Overall = Comp$count/870*100
+Comp$OverTime = Comp$Yes/252*100
+Comp_long <- gather(Comp, Population, Pct, c(Overall,OverTime))
+
+# Create the barplot
+Comp_long %>% ggplot(aes(x=JobRole, y=Pct, fill=Population, label=Pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= sprintf("%.1f%%", Pct)), position=position_dodge(0.9), vjust=-0.5, size=2.5)  + labs(x="JobRole", y="Percentage", title="Job Role Distribution: Overall Workforce vs. OverTime") + theme_minimal() +  scale_fill_manual(values = c("royalblue", "salmon")) + theme(axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=1))
+```
+
+According to the first bar plot, about 38% of Research Scientists worked overtime, exceeding the percentage for Sales Representatives. The lowest was Manager, 19.6% of them worked overtime.   
+
+In the second bar plot, approximately 26% of employees who worked overtime were Research Scientists, higher than the corresponding percentage (20%) for those across the entire company. This suggests that Research Scientists were more likely to work overtime.  
+
+```{r}
+# Boxplot - MonthlyIncome by JobRole
+case %>% ggplot(aes(x = JobRole, y = MonthlyIncome, fill = JobRole)) + geom_boxplot(width = 0.5, show.legend = FALSE) + labs(x="Job Role", y="Monthly Income", title="Monthly Income vs. Job Role") + theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=1)) + scale_y_continuous(labels = scales::dollar_format())
+
+# Group by JobRole and calculate the median MonthlyIncome
+case %>%  group_by(JobRole) %>% summarize(MedianMonthlyIncome = median(MonthlyIncome))
+
+```
+
+Sales Representatives had the lowest median monthly income and the highest attrition rate among other job roles.  
+
+Research Directors and Managers had the top two median monthly incomes, followed by Healthcare Representatives, Manufacturing Directors, and Sales Executives.  
+
+Human Resources, Laboratory Technicians, Research Scientists, and Sales Representatives had the lowest median monthly incomes, all below the company-wide median monthly income of $5,000.   
+
+```{r}
+# Boxplot - Age by JobRole
+case %>% ggplot(aes(x = JobRole, y = Age, fill = JobRole)) + geom_boxplot(width = 0.5, show.legend = FALSE) + labs(x="Job Role", y="Age", title="Age vs. Job Role") + theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=1))
+
+# Group by JobRole and calculate the median Age
+case %>%  group_by(JobRole) %>% summarize(MedianAge = median(Age))
+```
+
+Among the job roles, Sales Representatives had the lowest median age, while Managers had the highest median age.   
+
+```{r fig.height=7}
+# Boxplot - YearsAtCompany by JobRole
+case %>% ggplot(aes(x = JobRole, y = YearsAtCompany, fill = JobRole)) + geom_boxplot(width = 0.5, show.legend = FALSE) + labs(x="Job Role", y="Years At Company", title="Years At Company vs. Job Role") + theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=1)) + 
+  scale_y_continuous(n.breaks=9)
+
+# Group by JobRole and calculate the median YearsAtCompany
+case %>%  group_by(JobRole) %>% summarize(MedianYearsAtCompany = median(YearsAtCompany))
+```
+
+Sales Representatives had the lowest median years at the company and the highest attrition rate among other job roles.  
+
+Managers tended to stay with the company the longest, having the highest median years at the company among the job roles, followed by Research Directors. In the next tier for median years at the company were Healthcare Representatives, Manufacturing Directors, and Sales Executives. Following them were Human Resources, Laboratory Technicians, and Research Scientists, with their median years at the company higher than that of Sales Representatives.  
+
+Considering With the previous findings, Sales Representatives tended to be younger and stayed with the company for a shorter duration, having the lowest median monthly income and a higher attrition rate.  
+
+```{r}
+# Boxplot - TotalWorkingYears by JobRole
+case %>% ggplot(aes(x = JobRole, y = TotalWorkingYears, fill = JobRole)) + geom_boxplot(width = 0.5, show.legend = FALSE) + labs(x="Job Role", y="Tota lWorking Years", title="Total Working Years vs. Job Role") + theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=1))
+
+# Group by JobRole and calculate the median TotalWorkingYears
+case %>%  group_by(JobRole) %>% summarize(MedianTotalWorkingYears = median(TotalWorkingYears))
+```
+
+Both Manager and Research Director were the top two median total working years. Sales Representative had the least.    
+
+```{r fig.height = 4.8, include=FALSE}
+# Department by JobRole
+# Total number of employees based on JobRole
+D_JR = case %>% select(JobRole, Department) %>% group_by(JobRole) %>% summarise(count=n())
+
+# Find out the number of each Department for each JobRole
+# Combine the result with D_JR data frame
+D_JR <- cbind(D_JR,as.data.frame.matrix(table(case$JobRole, case$Department)))
+
+# Make D_JR into long dataset
+D_JR_long <- gather(D_JR, Department, Qty, c("Human Resources", "Research & Development", "Sales"))
+# Add column and calculate the percentage of MaritalStatus
+D_JR_long$pct = D_JR_long$Qty / D_JR_long$count *100
+
+# Create the barplot
+D_JR_long %>% ggplot(aes(x=JobRole, y=pct, fill=Department, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= if_else(pct > 0,  sprintf("%.1f%%", pct), "")), position=position_dodge(0.9), vjust=-0.5, size=2.5) + labs(x="Job Role", y="Percentage", title="Department by Job Role") + theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=1)) +  scale_fill_manual(values = c("royalblue", "salmon", "forestgreen"))
+```
+
+```{r fig.height = 4.8, include=FALSE}
+# JobLevel by JobRole
+# Total number of employees based on JobRole
+JL_JR = case %>% select(JobRole, JobLevel) %>% group_by(JobRole) %>% summarise(count=n())
+
+# Find out the number of each JobLevel for each JobRole
+# Combine the result with JL_JR data frame
+JL_JR <- cbind(JL_JR,as.data.frame.matrix(table(case$JobRole, case$JobLevel)))
+
+# Make JL_JR into long dataset
+JL_JR_long <- gather(JL_JR, JobLevel, Qty, c("1", "2", "3", "4", "5"))
+# Add column and calculate the percentage of MaritalStatus
+JL_JR_long$pct = JL_JR_long$Qty / JL_JR_long$count *100
+
+# Create the barplot
+JL_JR_long %>% ggplot(aes(x=JobRole, y=pct, fill=JobLevel, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= if_else(pct > 0,  sprintf("%.1f%%", pct), "")), position=position_dodge(0.9), vjust=-0.5, size=2.5) + labs(x="Job Role", y="Percentage", title="JobLevel by Job Role") + theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=1))
+
+# Group by JobRole and calculate the median JobLevel
+case %>%  group_by(JobRole) %>% summarize(MedianJobLevel = median(JobLevel))
+```
+
+```{r fig.height = 4.8, include=FALSE}
+# JobLevel by JobRole
+# Total number of employees based on JobRole
+ES_JR = case %>% select(JobRole, EnvironmentSatisfaction) %>% group_by(JobRole) %>% summarise(count=n())
+
+# Find out the number of each EnvironmentSatisfaction for each JobRole
+# Combine the result with ES_JR data frame
+ES_JR <- cbind(ES_JR,as.data.frame.matrix(table(case$JobRole, case$EnvironmentSatisfaction)))
+
+# Make ES_JR into long dataset
+ES_JR_long <- gather(ES_JR, EnvironmentSatisfaction, Qty, c("1", "2", "3", "4"))
+# Add column and calculate the percentage of MaritalStatus
+ES_JR_long$pct = ES_JR_long$Qty / ES_JR_long$count *100
+
+# Create the barplot
+ES_JR_long %>% ggplot(aes(x=JobRole, y=pct, fill=EnvironmentSatisfaction, label=pct)) + geom_col(width=0.8, position='dodge') + geom_text(aes(label= if_else(pct > 0,  sprintf("%.1f%%", pct), "")), position=position_dodge(0.9), vjust=-0.5, size=2.5) + labs(x="Job Role", y="Percentage", title="EnvironmentSatisfaction by Job Role") + theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=1))
+```
+
+### Summary
+1. The top three contributing factors to employee attrition are:  
+    - Job Level/Monthly Income    
+    - Overtime   
+    - Job Involvement   
+
+2. The top indicative factors in employee attrition are:  
+    - Stock Option Level   
+    - Age/Generation   
+    - Marital Status   
+    - Total Working Years  
+    - Job Roles  
+
+  Job Role Specific Trends:  
+  
+1. Sales Representatives:  
+    - Highest attrition rate  
+    - Lowest median monthly income  
+    - Lowest median total working years   
+    - Lowest median years at company   
+    - Youngest in term of median age   
+
+2. Research Directors and Manufacturing Directors:  
+    - Lowest attrition rate  
+
+3. Managers:  
+    - Highest median monthly income   
+    - Highest median total working years   
+    - Highest median years at company  
+    - Oldest in term of median age   
+
+Research scientists were more likely to work overtime than employees in other job roles.   
+
+Manufacturing Directors did not have as high median monthly income, total working years, years at the company, or age as Managers and Research Directors. However, Manufacturing Directors had one of the lowest attrition rates, along with Research Directors. This group is worth further study to identify practices that led to their higher retention rate, in areas such as morale, recognition, environment, support, leadership, etc. The lessons learned may assist in increasing retention rates among Healthcare Representatives and Sales Executives, as they share similar ranges in median monthly income, total working years, years at the company, and age. Furthermore, these insights might contribute to improving the retention of other job roles throughout the company.  
+
+## Attrition Model
+The two different algorithms used are Naive Bayes and k-Nearest Neighbors. Performance criteria: to attain at least 60% in both sensitivity and specificity.  
+
+We conducted numerous iterations of Naive Bayes and k-Nearest Neighbors (k-NN) models, experimenting with various combinations and quantities of variables. They were evaluated based on whether they met the criteria, as well as accuracy.  
+
+The final combination of variables chosen includes JobInvolvement, StockOptionLevel, OverTime, MaritalStatus, and JobRole. This combination was chosen because it has relatively higher sensitivity and specificity, with the least number of variables used to avoid overfitting.   
+
+Finally, we compare the performance of Naive Bayes and k-NN models using the same chosen variables.  
+
+### OverSampling
+The oversampling technique is employed to balance the imbalanced dataset.  
+
+```{r, results='hide'}
+case3 = case
+case3$Attrition = as.factor(case3$Attrition)
+
+# Oversampling for imbalanced dataset
+OnlyYes = case3 %>% filter(Attrition == "Yes") # Give me all Yes
+# Oversampling of Yes
+# seed is set for reproducibility 
+set.seed(115)
+OnlyYesOver = rbind(OnlyYes,OnlyYes[sample(seq(1,140,1),(730-140),replace = TRUE),])
+dim(OnlyYesOver)
+
+# Combine the Oversampling of Yes and the rest of the No
+OverSamp = rbind(case3 %>% filter(Attrition == "No"), OnlyYesOver)
+dim(OverSamp)
+
+# Relevel to Yes as positive class
+OverSamp$Attrition = relevel(OverSamp$Attrition, ref = "Yes")
+
+# Split OverSamp into train and validation sets
+# seed is set for reproducibility
+set.seed(123)
+trainIndices = sample(seq(1:dim(OverSamp)[1]),
+                      round(.7*dim(OverSamp)[1]))
+train = OverSamp[trainIndices,]
+test = OverSamp[-trainIndices,]
+```
+```{r, results='hide'}
+head(train)
+head(test)
+```
+```{r}
+# Make sure the factor levels are in the same order. Relevel to Yes as positive class
+#test$Attrition = relevel(test$Attrition, ref = "Yes")
+
+```
+### Naive Bayes model
+
+```{r}
+# Naive Bayes
+
+# Model
+model = naiveBayes(train[,c('JobInvolvement', 'StockOptionLevel', 'OverTime', 'MaritalStatus', 'JobRole')], train$Attrition)
+
+# Cross Validation
+confusionMatrix(table(predict(model,test[,c('JobInvolvement', 'StockOptionLevel', 'OverTime', 'MaritalStatus', 'JobRole')]),
+                      test$Attrition), mode = "everything")
+
+```
+
+### k-Nearest Neighbors model
+
+```{r}
+# Turn categorical variables to numeric in OverSamp dataset
+
+OverSamp$JobRole[OverSamp$JobRole == "Healthcare Representative"] = 0
+OverSamp$JobRole[OverSamp$JobRole == "Human Resources"] = 1
+OverSamp$JobRole[OverSamp$JobRole == "Laboratory Technician"] = 2
+OverSamp$JobRole[OverSamp$JobRole == "Manager"] = 3
+OverSamp$JobRole[OverSamp$JobRole == "Manufacturing Director"] = 4
+OverSamp$JobRole[OverSamp$JobRole == "Research Director"] = 5
+OverSamp$JobRole[OverSamp$JobRole == "Research Scientist"] = 6
+OverSamp$JobRole[OverSamp$JobRole == "Sales Executive"] = 7
+OverSamp$JobRole[OverSamp$JobRole == "Sales Representative"] = 8
+OverSamp$JobRole = as.numeric(OverSamp$JobRole)
+
+OverSamp$MaritalStatus[OverSamp$MaritalStatus == "Divorced"] = 0
+OverSamp$MaritalStatus[OverSamp$MaritalStatus == "Single"] = 1
+OverSamp$MaritalStatus[OverSamp$MaritalStatus == "Married"] = 2
+OverSamp$MaritalStatus = as.numeric(OverSamp$MaritalStatus)
+
+OverSamp$OverTime[OverSamp$OverTime == "Yes"] = 0
+OverSamp$OverTime[OverSamp$OverTime == "No"] = 1
+OverSamp$OverTime = as.numeric(OverSamp$OverTime)
+
+```
+
+```{r}
+# k-NN (k=5)
+
+# Split OverSamp into train and validation sets
+# seed is set for reproducibility, same as the Naive Bayes
+set.seed(123)
+trainIndices = sample(seq(1:dim(OverSamp)[1]),
+                      round(.7*dim(OverSamp)[1]))
+train = OverSamp[trainIndices,]
+test = OverSamp[-trainIndices,]
+```
+```{r, results='hide'}
+head(train)
+head(test)
+```
+```{r}
+# Make sure the factor levels are in the same order. Relevel to Yes as positive class
+#test$Attrition = relevel(test$Attrition, ref = "Yes")
+
+# Model
+classifications = knn(train[,c('JobInvolvement', 'StockOptionLevel', 'OverTime', 'MaritalStatus', 'JobRole')],test[,c('JobInvolvement', 'StockOptionLevel', 'OverTime', 'MaritalStatus', 'JobRole')], train$Attrition, prob = TRUE, k = 5)
+
+# External Cross Validation
+confusionMatrix(table(classifications,test$Attrition), mode = "everything")
+
+```
+
+```{r}
+# k-NN Leave-One-Out Cross Validation (LOOCV)
+classifications = knn.cv(OverSamp[,c('JobInvolvement', 'StockOptionLevel', 'OverTime', 'MaritalStatus', 'JobRole')],OverSamp$Attrition, k=5)
+
+confusionMatrix(table(classifications, OverSamp$Attrition), mode = "everything")
+
+```
+"The positive class in all confusion matrices is 'Yes' for Attrition.   
+Accuracy, Sensitivity, and Specificity from the k-NN model are higher than those from the Naive Bayes model, all surpassing 70%.   
+Consequently, the k-NN model is chosen for prediction.  
+
+## Attrition Prediction
+
+```{r}
+# Turn categorical variables to numeric for test_attr before prediction
+
+test_attr$JobRole[test_attr$JobRole == "Healthcare Representative"] = 0
+test_attr$JobRole[test_attr$JobRole == "Human Resources"] = 1
+test_attr$JobRole[test_attr$JobRole == "Laboratory Technician"] = 2
+test_attr$JobRole[test_attr$JobRole == "Manager"] = 3
+test_attr$JobRole[test_attr$JobRole == "Manufacturing Director"] = 4
+test_attr$JobRole[test_attr$JobRole == "Research Director"] = 5
+test_attr$JobRole[test_attr$JobRole == "Research Scientist"] = 6
+test_attr$JobRole[test_attr$JobRole == "Sales Executive"] = 7
+test_attr$JobRole[test_attr$JobRole == "Sales Representative"] = 8
+test_attr$JobRole = as.numeric(test_attr$JobRole)
+
+test_attr$MaritalStatus[test_attr$MaritalStatus == "Divorced"] = 0
+test_attr$MaritalStatus[test_attr$MaritalStatus == "Single"] = 1
+test_attr$MaritalStatus[test_attr$MaritalStatus == "Married"] = 2
+test_attr$MaritalStatus = as.numeric(test_attr$MaritalStatus)
+
+test_attr$OverTime[test_attr$OverTime == "Yes"] = 0
+test_attr$OverTime[test_attr$OverTime == "No"] = 1
+test_attr$OverTime = as.numeric(test_attr$OverTime)
+
+```
+
+```{r}
+# Prediction for test_attr test set using k-NN model
+
+predictions <- knn(OverSamp[,c('JobInvolvement', 'StockOptionLevel', 'OverTime', 'MaritalStatus', 'JobRole')], test_attr[,c('JobInvolvement', 'StockOptionLevel', 'OverTime', 'MaritalStatus', 'JobRole')], OverSamp$Attrition, k=5)
+
+# Create a new data frame with column ID from test_attr test set
+Predict_Attrition = test_attr %>% select("ID")
+
+Predict_Attrition$Attrition = predictions
+
+# Export the results into ,csv file
+write.csv(Predict_Attrition, "Case2PredictionsPang Attrition.csv", row.names = FALSE)
+
+```
+# Monthly Income
+We use a similar approach to that applied to Attrition to identify contributing factors to monthly income and predict monthly income for the test set using a linear regression model.   
+
+## Exploratory Data Analysis (EDA)
+### Pairwise correlation
+
+Begin by examining correlation coefficients between MonthlyIncome and other variables to gain a general understanding. Subsequently, utilize visualization techniques and additional statistical analyses to further explore these relationships.  
+
+```{r, results='hide'}
+# See MonthlyIncome only, from pairwise correlation conducted earlier.
+Mcor_p = cor_p %>% filter(var2 == "MonthlyIncome")
+# Arrange by absolute value of correlation coefficients in descending order
+Mcor_p = arrange(Mcor_p, desc(abs(cor)))
+Mcor_p[2:11,]
+```
+
+### Graphs and statistical analysis
+JobLevel and TotalWorkingYears had the top two correlation coefficients. We will investigate them further. 
+
+```{r, message=FALSE}
+# Monthly Income Distribution
+case %>% ggplot(aes(x=MonthlyIncome)) + geom_histogram(fill = "royalblue") + labs(x="Monthly Income", y="Frequency", title="Histogram of Monthly Income Distribution") + theme_minimal() + scale_x_continuous(labels = scales::dollar_format())
+
+summary(case$MonthlyIncome)
+```
+
+The distribution of monthly income is heavily right skewed, with the company's median monthly income at around $5,000.  
+
+```{r}
+# Boxplot - MonthlyIncome by JobRole
+case %>% ggplot(aes(x = JobRole, y = MonthlyIncome, fill = JobRole)) + geom_boxplot(width = 0.5, show.legend = FALSE) + labs(x="Job Role", y="Monthly Income", title="Monthly Income vs. Job Role") + theme_minimal() + theme(axis.text.x = element_text(angle = 90, vjust = 0.3, hjust=1)) + scale_y_continuous(labels = scales::dollar_format())
+```
+
+At the highest, both the median monthly income of Managers and Research Directors exceeded $15,000. Next, only Healthcare Representatives, Manufacturing Directors, and Sales Executives had median monthly incomes surpassing the company's median of $5,000. The median monthly income of all other job roles was below $5,000.  
+
+```{r}
+# Boxplot - MonthlyIncome by Gender
+case %>% ggplot(aes(x = Gender, y = MonthlyIncome)) + geom_boxplot(fill = "cornflowerblue", color = "black", width = 0.3) + labs(x="Gender", y="Monthly Income", title="Monthly Income vs. Gender") + theme_minimal() + scale_y_continuous(labels = scales::dollar_format())
+
+# Run a t-test on mean salary for Gender
+Female = as.data.frame(case$MonthlyIncome[case$Gender == "Female"])
+Male = as.data.frame(case$MonthlyIncome[case$Gender == "Male"])
+
+t.test(x = Female, y = Male, conf.int = .95, alternative = "two.sided")
+```
+
+There is not sufficient evidence to suggest that the mean monthly income of female is different from that of male (p-value = 0.1055 > 0.05 from Welch's t-test).  
+
+```{r}
+# Boxplot - MonthlyIncome by Department
+case %>% ggplot(aes(x = Department, y = MonthlyIncome)) + geom_boxplot(fill = "cornflowerblue", color = "black", width = 0.3) + labs(x="Department", y="Monthly Income", title="Monthly Income vs. Department") + theme_minimal() + scale_y_continuous(labels = scales::dollar_format())
+
+```
+
+Sales had the highest median monthly income among the departments.  
+
+```{r, message=FALSE}
+# Scatterplot of Monthly Income vs. Job Level
+case %>% ggplot(aes(x=JobLevel, y=MonthlyIncome)) + geom_point() + geom_smooth(method = lm) + labs(x="Job Level", y="Monthly Income", title="Monthly Income vs. Job Level") + theme_minimal() + scale_y_continuous(labels = scales::dollar_format())
+
+# To fit a linear regrssion model
+fit = lm(MonthlyIncome ~ JobLevel, data = case)
+summary(fit)
+```
+
+Monthly Income appears to be correlated with job level, as evident from the scatterplot. The estimated mean monthly income increases with the rise in job level.  
+
+The fitted linear regression provides strong evidence suggesting a linear relationship between monthly income and job level (p-value < 0.0001 < 0.05). The Adjusted R-squared value is 0.9055, indicating that 90.55% of the variation in monthly income can be explained by job level.  
+
+This finding aligns with common practices, as most companies typically define a salary range for each job level.  
+
+```{r, message=FALSE}
+# Scatterplot of Monthly Income vs. Total Working Years
+case %>% ggplot(aes(x=TotalWorkingYears, y=MonthlyIncome)) + geom_point() + geom_smooth(method = lm) + labs(x="Total Working Years", y="Monthly Income", title="Monthly Income vs. Total Working Years") + theme_minimal() + scale_y_continuous(labels = scales::dollar_format())
+
+fit = lm(MonthlyIncome ~ TotalWorkingYears, data = case)
+summary(fit)
+```
+
+Monthly Income appears to be correlated with TotalWorkingYears, as indicated by the scatterplot. The estimated mean monthly income increases as total working years increases.    
+
+The fitted linear regression provides strong evidence suggesting a linear relationship between monthly income and the total working years of an employee (p-value < 0.0001 < 0.05). The Adjusted R-squared is 0.6056, meaning that 60.56% of the variation in monthly income can be explained by total working years.  
+
+Work experience is typically one of the factors that contribute to determining someone's salary.  
+
+## Monthly Income Model
+Using leave-one-out cross validation method, we compare 4 different linear regression models.
+
+Model 1: one explanatory varible: JobLevel  
+Model 2: one explanatory varible: TotalWorkingYears  
+Model 3: two explanatory varibles: JobLevel and TotalWorkingYears  
+Model 4: Model 3 with interaction between JobLevel and TotalWorkingYears  
+
+```{r}
+# Change data type to numeric
+case$JobLevel <- as.numeric(case$JobLevel)
+case$TotalWorkingYears <- as.numeric(as.character(case$TotalWorkingYears))
+
+# Run train functions:
+# Model 1:
+model <- train(MonthlyIncome ~ JobLevel, method = "lm", data = case, trControl = trainControl(method = "LOOCV"))
+model
+
+# Model 2:
+model2 <- train(MonthlyIncome ~ TotalWorkingYears, method = "lm", data = case, trControl = trainControl(method = "LOOCV"))
+model2
+
+# Model 3:
+model3 <- train(MonthlyIncome ~ JobLevel + TotalWorkingYears, method = "lm", data = case, trControl = trainControl(method = "LOOCV"))
+model3
+
+# Model 4:
+model4 <- train(MonthlyIncome ~ JobLevel * TotalWorkingYears, method = "lm", data = case, trControl = trainControl(method = "LOOCV"))
+model4
+
+```
+Model 4 is chosen as it has the least RMSE and MAE, and the highest R-squared.
+
+```{r echo=FALSE, results='hide'}
+fit = lm(MonthlyIncome ~ JobLevel * TotalWorkingYears, data = case)
+summary(fit)
+```
+
+## Monthly Income Prediction
+
+```{r}
+# Predict for test_salary test set
+mi_predict <- predict(model4, newdata = test_salary)
+
+# Create a new data frame with column ID from test_salary test set
+Predict_MonthlyIncome = data.frame("ID" = test_salary$ï..ID)
+# Input the prediction result into the new data frame
+Predict_MonthlyIncome$MonthlyIncome = mi_predict
+
+# Export the results into ,csv file
+write.csv(Predict_MonthlyIncome, "Case2PredictionsPang Salary.csv", row.names = FALSE)
+```
+
+# Conclusion
+Employees are a pivotal component of an organization. In addition to significant cost savings, organizations with low attrition rates tend to excel in innovation, achieve higher productivity levels, and enhance customer satisfaction, making them more appealing to top talent.  
+
+The analysis of the employee dataset from Frito Lay provided valuable insights into the key factors influencing attrition within the company. The comprehensive exploration involved statistical methods and visualizations. Here are the key findings:  
+
+### Attrition Analysis:
+1. The top three contributing factors to employee attrition are:  
+   - Job Level/Monthly Income    
+   - Overtime   
+   - Job Involvement   
+
+2. The top indicative factors in employee attrition are:  
+   - Stock Option Level   
+   - Age/Generation   
+   - Marital Status   
+   - Total Working Years  
+   - Job Roles  
+
+#### Job Role Specific Trends:  
+1. Sales Representatives:  
+   - Highest attrition rate  
+   - Lowest median monthly income  
+   - Lowest median total working years
+   - Lowest median years at company
+   - Youngest in term of median age
+
+2. Research Directors and Manufacturing Directors:  
+   - Lowest attrition rate  
+
+3. Managers:  
+   - Highest median monthly income  
+   - Highest median total working years  
+   - Highest median years at company
+   - Oldest in term of median age
+
+Manufacturing Directors had one of the lowest attrition rates, making this group worth further study to identify practices that contributed to their relatively higher retention rate. The lessons learned might contribute to improving the retention of other job roles throughout the company.       
+
+### Attrition Models:  
+1. Variables Used:  
+   - Job Involvement, Stock Option Level, Overtime, Marital Status, Job Role  
+
+2. Model Comparison:
+   - Naive Bayes vs. k-Nearest Neighbors  
+   - k-NN outperformed Naive Bayes in terms of accuracy, sensitivity, and specificity, each exceeding 70%.  
+   
+### Attrition Prediction:
+The k-Nearest Neighbors model is chosen for predicting attrition, given its superior performance. The result of the attrition prediction was exported to a .csv file.
+
+### Monthly Income Analysis:
+1. High correlation with:  
+   - Job Level  
+   - Total Working Years  
+   - Job Role  
+
+### Monthly Income Models:
+1. Variables Used:  
+   - Job Level, Total Working Years  
+
+2. Model Comparison:
+   - 4 linear regression models  
+   - The model with the interaction term (Model 4) exhibited the highest R-Squared and the lowest RMSE = $1328 < $3000  
+   
+### Monthly Income Prediction:
+The result of the monthly income prediction was exported to a .csv file.   
+
+In conclusion, this comprehensive analysis not only sheds light on the challenges of attrition and income prediction but also equips organizations with the knowledge to foster a resilient, engaged, and high-performing workforce. It underscores the importance of continuous monitoring, strategic planning, and data-driven decision-making in the dynamic landscape of talent management.
