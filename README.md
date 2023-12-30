@@ -2,7 +2,15 @@
 
 ## Overview
 
-DDSAnalytics is an analytics company specializing in talent management solutions for Fortune 100 companies. Talent management encompasses various aspects, such as workforce planning, employee training programs, identifying high-potential employees, and minimizing voluntary employee turnover (attrition). The analysis and study conducted by DDSAnalytics specifically focused on the employee attrition component, aiming to identify influential factors. This information allows Frito Lay to take targeted actions to improve employee retention.  
+DDSAnalytics is an analytics company specializing in talent management solutions for Fortune 100 companies. Talent management encompasses various aspects, such as workforce planning, employee training programs, identifying high-potential employees, and minimizing voluntary employee turnover (attrition). The analysis and study conducted by DDSAnalytics specifically focused on the employee attrition component, aiming to identify influential factors. This information allows Frito Lay to take targeted actions to improve employee retention.
+
+#### Presentation
+The presentation of this study:   
+https://youtu.be/MTaajBOWc4o   
+
+#### Shiny App
+The link below allows you to explore ratings from the employee dataset.  
+https://katonp.shinyapps.io/Attrition/  
 
 ## How to Use
 
