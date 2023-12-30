@@ -7,11 +7,11 @@ DDSAnalytics is an analytics company specializing in talent management solutions
 ## How to Use
 
 1. Clone this repository to your local machine.  
-2. Open and run the R Markdown file (Budweiser_US_Craft_Beers_Study.Rmd) in R or RStudio to reproduce the analysis.  
+2. Open and run the R Markdown file (DDSAnalytics_Attrition_Study.Rmd) in R or RStudio to reproduce the analysis.  
 
 ## Introduction
 
-Our team was provided with a dataset comprising existing employees of Frito Lay, with the aim of identifying factors contributing to attrition. The dataset includes information on employees, such as attrition status, monthly salary, satisfaction ratings, job roles, departments, etc. The objective of this study is threefold: first, to identify the top three factors contributing to attrition; second, to develop models predicting both attrition and monthly income; and third, to uncover job role-specific trends and other insightful information.  
+Our team was provided with a dataset comprising existing employees of Frito Lay, to identify factors contributing to attrition. The dataset includes information on employees, such as attrition status, monthly salary, satisfaction ratings, job roles, departments, etc. The objective of this study is threefold: first, to identify the top three factors contributing to attrition; second, to develop models predicting both attrition and monthly income; and third, to uncover job role-specific trends and other insightful information.  
 
 ## Data
 
